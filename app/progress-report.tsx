@@ -29,6 +29,24 @@ import Card from '../components/common/Card';
 import Checkbox from '../components/common/Checkbox';
 import Input from '../components/common/Input';
 
+// Interfejs dla pojedynczej aktywności
+interface Activity {
+  id: string;
+  zone: string;
+  activityType: string;
+  details: {
+    row?: string;
+    table?: string;
+    cableType?: string;
+    substation?: string;
+    inverter?: string;
+    string?: string;
+    trench?: string;
+    quantity?: string;
+    length?: string;
+  };
+}
+
 export default function ProgressReportScreen() {
   const { theme, isDarkMode } = useTheme();
   const params = useLocalSearchParams();
@@ -48,20 +66,16 @@ export default function ProgressReportScreen() {
   const [allMembers, setAllMembers] = useState<string[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<ReportMember[]>([]);
 
-  // Zmienne dla wyboru aktywności i strefy
-  const [selectedZone, setSelectedZone] = useState<string>('');
-  const [selectedActivity, setSelectedActivity] = useState<string>('');
-  const [selectedRow, setSelectedRow] = useState<string>('');
-  const [selectedTable, setSelectedTable] = useState<string>('');
-  const [selectedCableType, setSelectedCableType] = useState<string>('');
-  const [selectedSubstation, setSelectedSubstation] = useState<string>('');
-  const [selectedInverter, setSelectedInverter] = useState<string>('');
-  const [selectedString, setSelectedString] = useState<string>('');
-  const [selectedTrench, setSelectedTrench] = useState<string>('');
+  // Lista dodanych aktywności
+  const [activities, setActivities] = useState<Activity[]>([]);
   
-  // Wartości dla ilości i długości
-  const [quantity, setQuantity] = useState<string>('');
-  const [length, setLength] = useState<string>('');
+  // Aktualna edytowana aktywność
+  const [currentActivity, setCurrentActivity] = useState<Activity>({
+    id: Date.now().toString(),
+    zone: '',
+    activityType: '',
+    details: {}
+  });
   
   // Zdjęcia
   const [images, setImages] = useState<ReportImage[]>([]);
@@ -101,6 +115,10 @@ export default function ProgressReportScreen() {
           setImages(draftReport.images);
           setProjectName(draftReport.projectName || '');
           setComment(draftReport.comment || '');
+          // Jeśli istnieją zapisane aktywności, załaduj je
+          if (draftReport.activities) {
+            setActivities(draftReport.activities);
+          }
         }
       }
     } catch (error) {
@@ -168,160 +186,470 @@ export default function ProgressReportScreen() {
     setSelectedMembers(selectedMembers.filter(m => m.name !== memberName));
   };
 
-  const renderFields = () => {
-    if (!projectConfig || !selectedZone || !selectedActivity) return null;
+  // Zmiana strefy - resetuje dalsze wybory
+  const handleZoneChange = (value: string) => {
+    setCurrentActivity({
+      ...currentActivity,
+      zone: value,
+      activityType: '',
+      details: {} // Resetujemy szczegóły przy zmianie strefy
+    });
+  };
 
-    const { aktywnosci } = projectConfig.config.zones[selectedZone];
-    const activity = aktywnosci[selectedActivity];
+  // Zmiana aktywności - resetuje dalsze wybory
+  const handleActivityTypeChange = (value: string) => {
+    setCurrentActivity({
+      ...currentActivity,
+      activityType: value,
+      details: {} // Resetujemy szczegóły przy zmianie typu aktywności
+    });
+  };
 
-    switch (selectedActivity) {
+  // Zmiana typu kabla - resetuje dalsze wybory zależne od kabla
+  const handleCableTypeChange = (value: string) => {
+    const updatedDetails = { ...currentActivity.details, cableType: value };
+    // Resetujemy pola, które są zależne od typu kabla
+    delete updatedDetails.substation;
+    delete updatedDetails.inverter;
+    delete updatedDetails.string;
+    delete updatedDetails.length;
+    
+    setCurrentActivity({
+      ...currentActivity,
+      details: updatedDetails
+    });
+  };
+
+  // Zmiana trafostacji - resetuje dalsze wybory
+  const handleSubstationChange = (value: string) => {
+    const updatedDetails = { ...currentActivity.details, substation: value };
+    // Resetujemy pola, które są zależne od trafostacji
+    delete updatedDetails.inverter;
+    delete updatedDetails.string;
+    delete updatedDetails.length;
+    
+    setCurrentActivity({
+      ...currentActivity,
+      details: updatedDetails
+    });
+  };
+
+  // Zmiana inwertera - resetuje dalsze wybory
+  const handleInverterChange = (value: string) => {
+    const updatedDetails = { ...currentActivity.details, inverter: value };
+    // Resetujemy pola, które są zależne od inwertera
+    delete updatedDetails.string;
+    delete updatedDetails.length;
+    
+    setCurrentActivity({
+      ...currentActivity,
+      details: updatedDetails
+    });
+  };
+
+  // Dodawanie aktywności do listy
+  const addActivity = () => {
+    // Walidacja czy wszystkie wymagane pola są wypełnione
+    if (!currentActivity.zone || !currentActivity.activityType) {
+      Alert.alert('Błąd', 'Wybierz strefę i aktywność.');
+      return;
+    }
+    
+    // Walidacja szczegółów w zależności od typu aktywności
+    if (!validateActivityDetails()) {
+      return;
+    }
+    
+    // Dodanie aktywności do listy
+    setActivities([...activities, { ...currentActivity, id: Date.now().toString() }]);
+    
+    // Resetowanie aktualnej aktywności
+    setCurrentActivity({
+      id: Date.now().toString(),
+      zone: '',
+      activityType: '',
+      details: {}
+    });
+  };
+
+  // Usuwanie aktywności z listy
+  const removeActivity = (id: string) => {
+    Alert.alert(
+      'Usuń aktywność',
+      'Czy na pewno chcesz usunąć tę aktywność?',
+      [
+        { text: 'Anuluj', style: 'cancel' },
+        { 
+          text: 'Usuń', 
+          style: 'destructive',
+          onPress: () => {
+            setActivities(activities.filter(activity => activity.id !== id));
+          }
+        }
+      ]
+    );
+  };
+
+  // Walidacja szczegółów aktywności w zależności od typu
+  const validateActivityDetails = (): boolean => {
+    const { activityType, details } = currentActivity;
+    
+    switch (activityType) {
+      case 'Moduły':
+        if (!details.row || !details.table || !details.quantity) {
+          Alert.alert('Błąd', 'Wypełnij wszystkie wymagane pola dla modułów.');
+          return false;
+        }
+        break;
+      case 'Konstrukcja':
+        if (!details.row || !details.table) {
+          Alert.alert('Błąd', 'Wypełnij wszystkie wymagane pola dla konstrukcji.');
+          return false;
+        }
+        break;
+      case 'Elektryka':
+        if (!details.cableType) {
+          Alert.alert('Błąd', 'Wybierz typ kabla.');
+          return false;
+        }
+        if (!details.substation || !details.inverter) {
+          Alert.alert('Błąd', 'Wybierz trafostację i inwerter.');
+          return false;
+        }
+        if (details.cableType === 'Kabel DC' && (!details.string || !details.length)) {
+          Alert.alert('Błąd', 'Wypełnij wszystkie wymagane pola dla kabla DC.');
+          return false;
+        }
+        if (details.cableType === 'Kabel AC' && !details.length) {
+          Alert.alert('Błąd', 'Podaj długość kabla AC.');
+          return false;
+        }
+        break;
+      case 'Wykopy':
+        if (!details.trench || !details.quantity) {
+          Alert.alert('Błąd', 'Wypełnij wszystkie wymagane pola dla wykopów.');
+          return false;
+        }
+        break;
+      default:
+        return false;
+    }
+    
+    return true;
+  };
+
+  // Renderowanie formularza w zależności od wybranej aktywności
+  const renderActivityForm = () => {
+    if (!projectConfig || !currentActivity.zone || !currentActivity.activityType) return null;
+
+    // Bezpieczny dostęp do aktywności
+    const { aktywnosci } = projectConfig.config.zones[currentActivity.zone] || {};
+    if (!aktywnosci) return null;
+
+    const activity = aktywnosci[currentActivity.activityType];
+    if (!activity) return null;
+
+    const details = currentActivity.details || {};
+
+    switch (currentActivity.activityType) {
       case 'Moduły':
         return (
           <>
             <Picker
-              selectedValue={selectedRow}
-              onValueChange={(value: string) => setSelectedRow(value)}
+              selectedValue={details.row || ''}
+              onValueChange={(value: string) => setCurrentActivity({
+                ...currentActivity,
+                details: { ...details, row: value, table: '' }
+              })}
             >
               <Picker.Item label="Wybierz rząd" value="" />
-              {Object.keys(activity.rzędy).map((row) => (
+              {activity.rzędy && Object.keys(activity.rzędy).map((row) => (
                 <Picker.Item key={row} label={`Rząd ${row}`} value={row} />
               ))}
             </Picker>
-            {selectedRow && (
+            
+            {details.row && activity.rzędy && activity.rzędy[details.row] && (
               <Picker
-                selectedValue={selectedTable}
-                onValueChange={(value) => setSelectedTable(value)}
+                selectedValue={details.table || ''}
+                onValueChange={(value: string) => setCurrentActivity({
+                  ...currentActivity,
+                  details: { ...details, table: value }
+                })}
               >
                 <Picker.Item label="Wybierz numer stołu" value="" />
-                {Object.keys(activity.rzędy[selectedRow].stoły).map((table) => (
+                {Object.keys(activity.rzędy[details.row].stoły || {}).map((table) => (
                   <Picker.Item key={table} label={`Stół ${table}`} value={table} />
                 ))}
               </Picker>
             )}
-            {selectedTable && (
+            
+            {details.row && details.table && activity.rzędy && 
+             activity.rzędy[details.row] && 
+             activity.rzędy[details.row].stoły && 
+             activity.rzędy[details.row].stoły[details.table] && (
               <TextInput
-                value={quantity}
-                onChangeText={setQuantity}
-                placeholder={`Wpisz ilość modułów (max ${activity.rzędy[selectedRow].stoły[selectedTable].ilosc_modulow_max})`}
+                value={details.quantity || ''}
+                onChangeText={(value) => setCurrentActivity({
+                  ...currentActivity,
+                  details: { ...details, quantity: value }
+                })}
+                placeholder={`Wpisz ilość modułów (max ${activity.rzędy[details.row].stoły[details.table].ilosc_modulow_max})`}
                 keyboardType="numeric"
+                style={[styles.textInput, {
+                  backgroundColor: theme.colors.surface,
+                  color: theme.colors.text,
+                  borderColor: theme.colors.border
+                }]}
               />
             )}
           </>
         );
+        
       case 'Konstrukcja':
         return (
           <>
             <Picker
-              selectedValue={selectedRow}
-              onValueChange={(value) => setSelectedRow(value)}
+              selectedValue={details.row || ''}
+              onValueChange={(value: string) => setCurrentActivity({
+                ...currentActivity,
+                details: { ...details, row: value, table: '' }
+              })}
             >
               <Picker.Item label="Wybierz rząd" value="" />
-              {Object.keys(activity.rzędy).map((row) => (
+              {activity.rzędy && Object.keys(activity.rzędy).map((row) => (
                 <Picker.Item key={row} label={`Rząd ${row}`} value={row} />
               ))}
             </Picker>
-            {selectedRow && (
+            
+            {details.row && activity.rzędy && activity.rzędy[details.row] && (
               <Picker
-                selectedValue={selectedTable}
-                onValueChange={(value) => setSelectedTable(value)}
+                selectedValue={details.table || ''}
+                onValueChange={(value: string) => setCurrentActivity({
+                  ...currentActivity,
+                  details: { ...details, table: value }
+                })}
               >
                 <Picker.Item label="Wybierz numer stołu" value="" />
-                {Object.keys(activity.rzędy[selectedRow].stoły).map((table) => (
+                {Object.keys(activity.rzędy[details.row].stoły || {}).map((table) => (
                   <Picker.Item key={table} label={`Stół ${table}`} value={table} />
                 ))}
               </Picker>
             )}
           </>
         );
+        
       case 'Elektryka':
         return (
           <>
             <Picker
-              selectedValue={selectedCableType}
-              onValueChange={(value) => setSelectedCableType(value)}
+              selectedValue={details.cableType || ''}
+              onValueChange={(value: string) => handleCableTypeChange(value)}
             >
               <Picker.Item label="Wybierz podtyp" value="" />
               <Picker.Item label="Kabel AC" value="Kabel AC" />
               <Picker.Item label="Kabel DC" value="Kabel DC" />
             </Picker>
-            {selectedCableType && (
+            
+            {details.cableType && activity[details.cableType] && (
               <>
                 <Picker
-                  selectedValue={selectedSubstation}
-                  onValueChange={(value) => setSelectedSubstation(value)}
+                  selectedValue={details.substation || ''}
+                  onValueChange={(value: string) => handleSubstationChange(value)}
                 >
                   <Picker.Item label="Wybierz trafostację" value="" />
-                  {Object.keys(activity[selectedCableType].trafostacje).map((substation) => (
+                  {activity[details.cableType].trafostacje && 
+                   Object.keys(activity[details.cableType].trafostacje).map((substation) => (
                     <Picker.Item key={substation} label={substation} value={substation} />
                   ))}
                 </Picker>
-                {selectedSubstation && (
+                
+                {details.substation && 
+                 activity[details.cableType] && 
+                 activity[details.cableType].trafostacje && 
+                 activity[details.cableType].trafostacje[details.substation] && (
                   <Picker
-                    selectedValue={selectedInverter}
-                    onValueChange={(value) => setSelectedInverter(value)}
+                    selectedValue={details.inverter || ''}
+                    onValueChange={(value: string) => handleInverterChange(value)}
                   >
                     <Picker.Item label="Wybierz inwerter" value="" />
-                    {Object.keys(activity[selectedCableType].trafostacje[selectedSubstation].inwertery).map((inverter) => (
+                    {Object.keys(activity[details.cableType].trafostacje[details.substation].inwertery || {}).map((inverter) => (
                       <Picker.Item key={inverter} label={inverter} value={inverter} />
                     ))}
                   </Picker>
                 )}
-                {selectedCableType === 'Kabel DC' && selectedInverter && (
+                
+                {details.cableType === 'Kabel DC' && 
+                 details.inverter && 
+                 details.substation &&
+                 activity[details.cableType] && 
+                 activity[details.cableType].trafostacje && 
+                 activity[details.cableType].trafostacje[details.substation] && 
+                 activity[details.cableType].trafostacje[details.substation].inwertery && 
+                 activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter] && 
+                 activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter][details.cableType] && (
                   <>
                     <Picker
-                      selectedValue={selectedString}
-                      onValueChange={(value) => setSelectedString(value)}
+                      selectedValue={details.string || ''}
+                      onValueChange={(value: string) => setCurrentActivity({
+                        ...currentActivity,
+                        details: { ...details, string: value }
+                      })}
                     >
                       <Picker.Item label="Wybierz numer stringu" value="" />
-                      {Object.keys(activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter][selectedCableType].stringi).map((string) => (
+                      {Object.keys(activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter][details.cableType].stringi || {}).map((string) => (
                         <Picker.Item key={string} label={string} value={string} />
                       ))}
                     </Picker>
-                    <TextInput
-                      value={length}
-                      onChangeText={setLength}
-                      placeholder={`Wpisz długość kabla (max ${activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter][selectedCableType].stringi[selectedString].dlugosc_max})`}
-                      keyboardType="numeric"
-                    />
+                    
+                    {details.string && 
+                     activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter][details.cableType].stringi && 
+                     activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter][details.cableType].stringi[details.string] && (
+                      <TextInput
+                        value={details.length || ''}
+                        onChangeText={(value) => setCurrentActivity({
+                          ...currentActivity,
+                          details: { ...details, length: value }
+                        })}
+                        placeholder={`Wpisz długość kabla (max ${activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter][details.cableType].stringi[details.string].dlugosc_max})`}
+                        keyboardType="numeric"
+                        style={[styles.textInput, {
+                          backgroundColor: theme.colors.surface,
+                          color: theme.colors.text,
+                          borderColor: theme.colors.border
+                        }]}
+                      />
+                    )}
                   </>
                 )}
-                {selectedCableType === 'Kabel AC' && selectedInverter && (
+                
+                {details.cableType === 'Kabel AC' && 
+                 details.inverter && 
+                 details.substation &&
+                 activity[details.cableType] && 
+                 activity[details.cableType].trafostacje && 
+                 activity[details.cableType].trafostacje[details.substation] && 
+                 activity[details.cableType].trafostacje[details.substation].inwertery && 
+                 activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter] && (
                   <TextInput
-                    value={length}
-                    onChangeText={setLength}
-                    placeholder={`Wpisz długość kabla (max ${activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter].dlugosc_max})`}
+                    value={details.length || ''}
+                    onChangeText={(value) => setCurrentActivity({
+                      ...currentActivity,
+                      details: { ...details, length: value }
+                    })}
+                    placeholder={`Wpisz długość kabla (max ${activity[details.cableType].trafostacje[details.substation].inwertery[details.inverter].dlugosc_max})`}
                     keyboardType="numeric"
+                    style={[styles.textInput, {
+                      backgroundColor: theme.colors.surface,
+                      color: theme.colors.text,
+                      borderColor: theme.colors.border
+                    }]}
                   />
                 )}
               </>
             )}
           </>
         );
+        
       case 'Wykopy':
         return (
           <>
             <Picker
-              selectedValue={selectedTrench}
-              onValueChange={(value) => setSelectedTrench(value)}
+              selectedValue={details.trench || ''}
+              onValueChange={(value: string) => setCurrentActivity({
+                ...currentActivity,
+                details: { ...details, trench: value }
+              })}
             >
               <Picker.Item label="Wybierz wykop" value="" />
-              {Object.keys(activity.wykopy).map((trench) => (
+              {activity.wykopy && Object.keys(activity.wykopy).map((trench) => (
                 <Picker.Item key={trench} label={trench} value={trench} />
               ))}
             </Picker>
-            {selectedTrench && (
+            
+            {details.trench && activity.wykopy && activity.wykopy[details.trench] && (
               <TextInput
-                value={quantity}
-                onChangeText={setQuantity}
-                placeholder={`Wpisz zrobioną ilość (max ${activity.wykopy[selectedTrench].ilosc_max})`}
+                value={details.quantity || ''}
+                onChangeText={(value) => setCurrentActivity({
+                  ...currentActivity,
+                  details: { ...details, quantity: value }
+                })}
+                placeholder={`Wpisz zrobioną ilość (max ${activity.wykopy[details.trench].ilosc_max})`}
                 keyboardType="numeric"
+                style={[styles.textInput, {
+                  backgroundColor: theme.colors.surface,
+                  color: theme.colors.text,
+                  borderColor: theme.colors.border
+                }]}
               />
             )}
           </>
         );
+        
       default:
         return null;
     }
+  };
+
+  // Generowanie czytelnego opisu aktywności
+  const getActivityDescription = (item: Activity) => {
+    let description = `Strefa: ${item.zone}, Aktywność: ${item.activityType}`;
+    
+    switch (item.activityType) {
+      case 'Moduły':
+        description += `, Rząd: ${item.details.row}, Stół: ${item.details.table}, Ilość: ${item.details.quantity}`;
+        break;
+      case 'Konstrukcja':
+        description += `, Rząd: ${item.details.row}, Stół: ${item.details.table}`;
+        break;
+      case 'Elektryka':
+        description += `, Typ: ${item.details.cableType}, Trafostacja: ${item.details.substation}, Inwerter: ${item.details.inverter}`;
+        if (item.details.cableType === 'Kabel DC') {
+          description += `, String: ${item.details.string}, Długość: ${item.details.length}m`;
+        } else {
+          description += `, Długość: ${item.details.length}m`;
+        }
+        break;
+      case 'Wykopy':
+        description += `, Wykop: ${item.details.trench}, Ilość: ${item.details.quantity}`;
+        break;
+    }
+    
+    return description;
+  };
+
+  // Renderowanie listy aktywności
+  const renderActivityList = () => {
+    if (activities.length === 0) {
+      return (
+        <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+          Brak dodanych aktywności. Dodaj co najmniej jedną aktywność.
+        </Text>
+      );
+    }
+    
+    return (
+      <ScrollView style={styles.activityList}>
+        {activities.map((item) => (
+          <View 
+            key={item.id}
+            style={[styles.activityItem, { 
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border 
+            }]}
+          >
+            <Text style={[styles.activityText, { color: theme.colors.text }]}>
+              {getActivityDescription(item)}
+            </Text>
+            <TouchableOpacity
+              style={styles.removeButton}
+              onPress={() => removeActivity(item.id)}
+            >
+              <Ionicons name="close-circle" size={24} color={theme.colors.error} />
+            </TouchableOpacity>
+          </View>
+        ))}
+      </ScrollView>
+    );
   };
   
   const pickImages = async () => {
@@ -364,18 +692,24 @@ export default function ProgressReportScreen() {
       return;
     }
     
+    if (activities.length === 0) {
+      Alert.alert('Błąd', 'Dodaj co najmniej jedną aktywność.');
+      return;
+    }
+    
     setSaving(true);
     try {
-        const report: ProgressReport = {
-            id: draftId, // Jeśli edytujemy istniejący roboczy, zachowaj jego ID
-            date: formatDateForStorage(date),
-            members: selectedMembers,
-            images: images,
-            comment: comment,
-            isDraft: true,
-            projectName: projectName,
-            createdAt: new Date().toISOString()
-          };
+      const report: ProgressReport = {
+        id: draftId, // Jeśli edytujemy istniejący roboczy, zachowaj jego ID
+        date: formatDateForStorage(date),
+        members: selectedMembers,
+        images: images,
+        comment: comment,
+        isDraft: true,
+        projectName: projectName,
+        createdAt: new Date().toISOString(),
+        activities: activities
+      };
       
       const result = await reportService.saveDraftReport(report);
       
@@ -397,6 +731,11 @@ export default function ProgressReportScreen() {
     // Walidacja
     if (selectedMembers.length === 0) {
       Alert.alert('Błąd', 'Wybierz co najmniej jednego członka brygady.');
+      return;
+    }
+    
+    if (activities.length === 0) {
+      Alert.alert('Błąd', 'Dodaj co najmniej jedną aktywność.');
       return;
     }
     
@@ -427,7 +766,8 @@ export default function ProgressReportScreen() {
         comment: comment,
         isDraft: false,
         projectName: projectName,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        activities: activities
       };
       
       const result = await reportService.submitReport(report);
@@ -521,44 +861,59 @@ export default function ProgressReportScreen() {
             </View>
           </Card>
           
-          {/* Renderowanie pól wyboru strefy i aktywności */}
+          {/* Sekcja wyboru aktywności */}
           {projectConfig && (
             <Card style={styles.section}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                Wybierz strefę i aktywność
+                Dodaj nową aktywność
               </Text>
+              
+              {/* Wybór strefy */}
               <Picker
-                selectedValue={selectedZone}
-                onValueChange={(value) => setSelectedZone(value)}
+                selectedValue={currentActivity.zone}
+                onValueChange={handleZoneChange}
               >
                 <Picker.Item label="Wybierz strefę" value="" />
-                {Object.keys(projectConfig.config.zones).map((zone) => (
+                {projectConfig.config.zones && Object.keys(projectConfig.config.zones).map((zone) => (
                   <Picker.Item key={zone} label={`Strefa ${zone}`} value={zone} />
                 ))}
               </Picker>
-              {selectedZone && (
+              
+              {/* Wybór aktywności */}
+              {currentActivity.zone && projectConfig.config.zones && projectConfig.config.zones[currentActivity.zone] && (
                 <Picker
-                  selectedValue={selectedActivity}
-                  onValueChange={(value) => setSelectedActivity(value)}
+                  selectedValue={currentActivity.activityType}
+                  onValueChange={handleActivityTypeChange}
                 >
                   <Picker.Item label="Wybierz aktywność" value="" />
-                  {Object.keys(projectConfig.config.zones[selectedZone].aktywnosci).map((activity) => (
+                  {Object.keys(projectConfig.config.zones[currentActivity.zone].aktywnosci || {}).map((activity) => (
                     <Picker.Item key={activity} label={activity} value={activity} />
                   ))}
                 </Picker>
               )}
+              
+              {/* Dynamiczny formularz dla wybranej aktywności */}
+              {renderActivityForm()}
+              
+              {/* Przycisk dodawania */}
+              {currentActivity.zone && currentActivity.activityType && (
+                <Button
+                  title="Dodaj aktywność"
+                  onPress={addActivity}
+                  style={styles.addButton}
+                  icon={<Ionicons name="add-circle" size={18} color="white" style={{marginRight: 8}} />}
+                />
+              )}
             </Card>
           )}
-
-          {/* Renderowanie dynamicznych pól na podstawie wybranej strefy i aktywności */}
-          {selectedZone && selectedActivity && (
-            <Card style={styles.section}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                Wprowadź dane
-              </Text>
-              {renderFields()}
-            </Card>
-          )}
+          
+          {/* Lista dodanych aktywności */}
+          <Card style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Dodane aktywności
+            </Text>
+            {renderActivityList()}
+          </Card>
           
           {/* Sekcja wyboru członków brygady */}
           <Card style={styles.section}>
@@ -821,6 +1176,34 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '500',
+  },
+  textInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+    fontSize: 16,
+  },
+  activityList: {
+    marginTop: 8,
+    maxHeight: 300,
+  },
+  activityItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  activityText: {
+    flex: 1,
+    fontSize: 14,
+  },
+  addButton: {
+    marginTop: 16,
   },
   membersListContainer: {
     marginBottom: 8,

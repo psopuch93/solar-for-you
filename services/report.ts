@@ -20,39 +20,46 @@ export interface ReportImage {
   type: string;
 }
 
+// Interfejs dla pojedynczej aktywności
+export interface Activity {
+  id: string;
+  zone: string;
+  activityType: string;
+  details: {
+    row?: string;
+    table?: string;
+    cableType?: string;
+    substation?: string;
+    inverter?: string;
+    string?: string;
+    trench?: string;
+    quantity?: string;
+    length?: string;
+  };
+}
+
 // Interfejs reprezentujący raport
 export interface ProgressReport {
   id?: string;         // ID raportu (generowane przy zapisie)
   date: string;        // Data raportu w formacie YYYY-MM-DD
   members: ReportMember[]; // Lista pracowników w raporcie
   images: ReportImage[]; // Lista zdjęć
+  comment?: string;    // Komentarz do raportu
   isDraft: boolean;    // Czy raport jest wersją roboczą
   projectName?: string; // Nazwa projektu, którego dotyczy raport
   createdAt?: string;  // Data utworzenia raportu
+  activities?: Activity[]; // Lista aktywności
 }
-
-// Interfejs reprezentujący raport
-export interface ProgressReport {
-    id?: string;         // ID raportu (generowane przy zapisie)
-    date: string;        // Data raportu w formacie YYYY-MM-DD
-    members: ReportMember[]; // Lista pracowników w raporcie
-    images: ReportImage[]; // Lista zdjęć
-    // DODAJ TUTAJ:
-    comment?: string;    // Komentarz do raportu
-    isDraft: boolean;    // Czy raport jest wersją roboczą
-    projectName?: string; // Nazwa projektu, którego dotyczy raport
-    createdAt?: string;  // Data utworzenia raportu
-  }
 
 // Format danych do wysyłki na serwer
 export interface ReportSubmitData {
-    date: string;
-    members: { name: string; hours: number }[];
-    projectName: string;
-    images: ReportImage[];
-    // DODAJ TUTAJ:
-    comment?: string;    // Komentarz do raportu
-  }
+  date: string;
+  members: { name: string; hours: number }[];
+  projectName: string;
+  images: ReportImage[];
+  comment?: string;    // Komentarz do raportu
+  activities?: Activity[]; // Lista aktywności
+}
 
 export const reportService = {
   // Pobieranie listy członków brygady dla zalogowanego użytkownika
@@ -156,7 +163,9 @@ export const reportService = {
         date: report.date,
         members: report.members,
         projectName: report.projectName || '',
-        images: report.images
+        images: report.images,
+        comment: report.comment,
+        activities: report.activities
       };
       
       // Przykładowe wysłanie raportu (tu trzeba dostosować do endpointu API)
