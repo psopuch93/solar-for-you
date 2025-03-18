@@ -1,39 +1,67 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
+// app/_layout.tsx
+import React, { useEffect } from 'react';
+import { StatusBar, LogBox } from 'react-native';
 import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import 'react-native-reanimated';
+import { ThemeProvider, useTheme } from '../utils/ThemeContext';
+import { useFonts } from 'expo-font';
+import { SplashScreen } from 'expo-router';
 
-import { useColorScheme } from '@/hooks/useColorScheme';
+// Ignoruj niektóre ostrzeżenia (opcjonalnie)
+LogBox.ignoreLogs([
+  'Async Storage has been extracted from react-native core',
+]);
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
+// Zapobiegaj automatycznemu ukrywaniu ekranu ładowania
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const [loaded] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+  const [fontsLoaded] = useFonts({
+    // Tutaj możesz załadować niestandardowe czcionki, np.:
+    // 'OpenSans-Regular': require('../assets/fonts/OpenSans-Regular.ttf'),
+    // 'OpenSans-Bold': require('../assets/fonts/OpenSans-Bold.ttf'),
   });
 
   useEffect(() => {
-    if (loaded) {
+    if (fontsLoaded) {
+      // Ukryj ekran ładowania po załadowaniu czcionek
       SplashScreen.hideAsync();
     }
-  }, [loaded]);
+  }, [fontsLoaded]);
 
-  if (!loaded) {
+  // Jeśli czcionki nie zostały załadowane, zwracamy null
+  // (ekran ładowania pozostanie widoczny)
+  if (!fontsLoaded) {
     return null;
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="+not-found" />
-      </Stack>
-      <StatusBar style="auto" />
+    <ThemeProvider>
+      <RootLayoutNav />
     </ThemeProvider>
+  );
+}
+
+function RootLayoutNav() {
+  const { theme, isDarkMode } = useTheme();
+
+  return (
+    <>
+      <StatusBar
+        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+        backgroundColor={theme.colors.background}
+      />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.colors.background },
+          animation: 'slide_from_right',
+        }}
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="dashboard" />
+        <Stack.Screen name="brigade" />
+        <Stack.Screen name="progress-report" />
+      </Stack>
+    </>
   );
 }

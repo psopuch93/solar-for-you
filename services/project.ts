@@ -38,6 +38,18 @@ export const projectService = {
     }
   },
 
+  getProjectConfig: async (projectName: string): Promise<any> => {
+    try {
+      console.log(`📋 Pobieranie konfiguracji dla projektu ${projectName}...`);
+      const config = await api.get(`/project/modules_config?project=${projectName}`);
+      console.log(`✅ Pobrano konfigurację projektu ${projectName}:`, config);
+      return config;
+    } catch (error) {
+      console.error('❌ Błąd podczas pobierania konfiguracji projektu:', error);
+      return null;
+    }
+  },
+
   // Zapisywanie ustawień użytkownika
   saveUserSettings: async (settings: UserSettings): Promise<{ success: boolean; message: string }> => {
     try {

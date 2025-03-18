@@ -21,11 +21,13 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { reportService, ProgressReport, ReportMember, ReportImage } from '../services/report';
 import { projectService } from '../services/project';
+import { Picker } from '@react-native-picker/picker';
 
 // Komponenty
 import Button from '../components/common/Button';
 import Card from '../components/common/Card';
 import Checkbox from '../components/common/Checkbox';
+import Input from '../components/common/Input';
 
 export default function ProgressReportScreen() {
   const { theme, isDarkMode } = useTheme();
@@ -40,10 +42,26 @@ export default function ProgressReportScreen() {
   const [date, setDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   const [projectName, setProjectName] = useState<string>('');
+  const [projectConfig, setProjectConfig] = useState<any>(null);
   
   // Członkowie brygady
   const [allMembers, setAllMembers] = useState<string[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<ReportMember[]>([]);
+
+  // Zmienne dla wyboru aktywności i strefy
+  const [selectedZone, setSelectedZone] = useState<string>('');
+  const [selectedActivity, setSelectedActivity] = useState<string>('');
+  const [selectedRow, setSelectedRow] = useState<string>('');
+  const [selectedTable, setSelectedTable] = useState<string>('');
+  const [selectedCableType, setSelectedCableType] = useState<string>('');
+  const [selectedSubstation, setSelectedSubstation] = useState<string>('');
+  const [selectedInverter, setSelectedInverter] = useState<string>('');
+  const [selectedString, setSelectedString] = useState<string>('');
+  const [selectedTrench, setSelectedTrench] = useState<string>('');
+  
+  // Wartości dla ilości i długości
+  const [quantity, setQuantity] = useState<string>('');
+  const [length, setLength] = useState<string>('');
   
   // Zdjęcia
   const [images, setImages] = useState<ReportImage[]>([]);
@@ -67,6 +85,12 @@ export default function ProgressReportScreen() {
       // Pobranie ustawień użytkownika (aktualny projekt)
       const settings = await projectService.getUserSettings();
       setProjectName(settings.project);
+
+      // Pobranie ustawień projektu
+      if (settings.project) {
+        const config = await projectService.getProjectConfig(settings.project);
+        setProjectConfig(config);
+      }
       
       // Jeśli podano ID roboczego raportu, załaduj go
       if (draftId) {
@@ -76,7 +100,6 @@ export default function ProgressReportScreen() {
           setSelectedMembers(draftReport.members);
           setImages(draftReport.images);
           setProjectName(draftReport.projectName || '');
-          // DODAJ TUTAJ:
           setComment(draftReport.comment || '');
         }
       }
@@ -144,6 +167,162 @@ export default function ProgressReportScreen() {
   const removeMember = (memberName: string) => {
     setSelectedMembers(selectedMembers.filter(m => m.name !== memberName));
   };
+
+  const renderFields = () => {
+    if (!projectConfig || !selectedZone || !selectedActivity) return null;
+
+    const { aktywnosci } = projectConfig.config.zones[selectedZone];
+    const activity = aktywnosci[selectedActivity];
+
+    switch (selectedActivity) {
+      case 'Moduły':
+        return (
+          <>
+            <Picker
+              selectedValue={selectedRow}
+              onValueChange={(value: string) => setSelectedRow(value)}
+            >
+              <Picker.Item label="Wybierz rząd" value="" />
+              {Object.keys(activity.rzędy).map((row) => (
+                <Picker.Item key={row} label={`Rząd ${row}`} value={row} />
+              ))}
+            </Picker>
+            {selectedRow && (
+              <Picker
+                selectedValue={selectedTable}
+                onValueChange={(value) => setSelectedTable(value)}
+              >
+                <Picker.Item label="Wybierz numer stołu" value="" />
+                {Object.keys(activity.rzędy[selectedRow].stoły).map((table) => (
+                  <Picker.Item key={table} label={`Stół ${table}`} value={table} />
+                ))}
+              </Picker>
+            )}
+            {selectedTable && (
+              <TextInput
+                value={quantity}
+                onChangeText={setQuantity}
+                placeholder={`Wpisz ilość modułów (max ${activity.rzędy[selectedRow].stoły[selectedTable].ilosc_modulow_max})`}
+                keyboardType="numeric"
+              />
+            )}
+          </>
+        );
+      case 'Konstrukcja':
+        return (
+          <>
+            <Picker
+              selectedValue={selectedRow}
+              onValueChange={(value) => setSelectedRow(value)}
+            >
+              <Picker.Item label="Wybierz rząd" value="" />
+              {Object.keys(activity.rzędy).map((row) => (
+                <Picker.Item key={row} label={`Rząd ${row}`} value={row} />
+              ))}
+            </Picker>
+            {selectedRow && (
+              <Picker
+                selectedValue={selectedTable}
+                onValueChange={(value) => setSelectedTable(value)}
+              >
+                <Picker.Item label="Wybierz numer stołu" value="" />
+                {Object.keys(activity.rzędy[selectedRow].stoły).map((table) => (
+                  <Picker.Item key={table} label={`Stół ${table}`} value={table} />
+                ))}
+              </Picker>
+            )}
+          </>
+        );
+      case 'Elektryka':
+        return (
+          <>
+            <Picker
+              selectedValue={selectedCableType}
+              onValueChange={(value) => setSelectedCableType(value)}
+            >
+              <Picker.Item label="Wybierz podtyp" value="" />
+              <Picker.Item label="Kabel AC" value="Kabel AC" />
+              <Picker.Item label="Kabel DC" value="Kabel DC" />
+            </Picker>
+            {selectedCableType && (
+              <>
+                <Picker
+                  selectedValue={selectedSubstation}
+                  onValueChange={(value) => setSelectedSubstation(value)}
+                >
+                  <Picker.Item label="Wybierz trafostację" value="" />
+                  {Object.keys(activity[selectedCableType].trafostacje).map((substation) => (
+                    <Picker.Item key={substation} label={substation} value={substation} />
+                  ))}
+                </Picker>
+                {selectedSubstation && (
+                  <Picker
+                    selectedValue={selectedInverter}
+                    onValueChange={(value) => setSelectedInverter(value)}
+                  >
+                    <Picker.Item label="Wybierz inwerter" value="" />
+                    {Object.keys(activity[selectedCableType].trafostacje[selectedSubstation].inwertery).map((inverter) => (
+                      <Picker.Item key={inverter} label={inverter} value={inverter} />
+                    ))}
+                  </Picker>
+                )}
+                {selectedCableType === 'Kabel DC' && selectedInverter && (
+                  <>
+                    <Picker
+                      selectedValue={selectedString}
+                      onValueChange={(value) => setSelectedString(value)}
+                    >
+                      <Picker.Item label="Wybierz numer stringu" value="" />
+                      {Object.keys(activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter][selectedCableType].stringi).map((string) => (
+                        <Picker.Item key={string} label={string} value={string} />
+                      ))}
+                    </Picker>
+                    <TextInput
+                      value={length}
+                      onChangeText={setLength}
+                      placeholder={`Wpisz długość kabla (max ${activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter][selectedCableType].stringi[selectedString].dlugosc_max})`}
+                      keyboardType="numeric"
+                    />
+                  </>
+                )}
+                {selectedCableType === 'Kabel AC' && selectedInverter && (
+                  <TextInput
+                    value={length}
+                    onChangeText={setLength}
+                    placeholder={`Wpisz długość kabla (max ${activity[selectedCableType].trafostacje[selectedSubstation].inwertery[selectedInverter].dlugosc_max})`}
+                    keyboardType="numeric"
+                  />
+                )}
+              </>
+            )}
+          </>
+        );
+      case 'Wykopy':
+        return (
+          <>
+            <Picker
+              selectedValue={selectedTrench}
+              onValueChange={(value) => setSelectedTrench(value)}
+            >
+              <Picker.Item label="Wybierz wykop" value="" />
+              {Object.keys(activity.wykopy).map((trench) => (
+                <Picker.Item key={trench} label={trench} value={trench} />
+              ))}
+            </Picker>
+            {selectedTrench && (
+              <TextInput
+                value={quantity}
+                onChangeText={setQuantity}
+                placeholder={`Wpisz zrobioną ilość (max ${activity.wykopy[selectedTrench].ilosc_max})`}
+                keyboardType="numeric"
+              />
+            )}
+          </>
+        );
+      default:
+        return null;
+    }
+  };
   
   const pickImages = async () => {
     // Prośba o uprawnienia dostępu do galerii
@@ -192,7 +371,6 @@ export default function ProgressReportScreen() {
             date: formatDateForStorage(date),
             members: selectedMembers,
             images: images,
-            // DODAJ TUTAJ:
             comment: comment,
             isDraft: true,
             projectName: projectName,
@@ -246,6 +424,7 @@ export default function ProgressReportScreen() {
         date: formatDateForStorage(date),
         members: selectedMembers,
         images: images,
+        comment: comment,
         isDraft: false,
         projectName: projectName,
         createdAt: new Date().toISOString()
@@ -341,6 +520,45 @@ export default function ProgressReportScreen() {
               </Text>
             </View>
           </Card>
+          
+          {/* Renderowanie pól wyboru strefy i aktywności */}
+          {projectConfig && (
+            <Card style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                Wybierz strefę i aktywność
+              </Text>
+              <Picker
+                selectedValue={selectedZone}
+                onValueChange={(value) => setSelectedZone(value)}
+              >
+                <Picker.Item label="Wybierz strefę" value="" />
+                {Object.keys(projectConfig.config.zones).map((zone) => (
+                  <Picker.Item key={zone} label={`Strefa ${zone}`} value={zone} />
+                ))}
+              </Picker>
+              {selectedZone && (
+                <Picker
+                  selectedValue={selectedActivity}
+                  onValueChange={(value) => setSelectedActivity(value)}
+                >
+                  <Picker.Item label="Wybierz aktywność" value="" />
+                  {Object.keys(projectConfig.config.zones[selectedZone].aktywnosci).map((activity) => (
+                    <Picker.Item key={activity} label={activity} value={activity} />
+                  ))}
+                </Picker>
+              )}
+            </Card>
+          )}
+
+          {/* Renderowanie dynamicznych pól na podstawie wybranej strefy i aktywności */}
+          {selectedZone && selectedActivity && (
+            <Card style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                Wprowadź dane
+              </Text>
+              {renderFields()}
+            </Card>
+          )}
           
           {/* Sekcja wyboru członków brygady */}
           <Card style={styles.section}>
@@ -481,6 +699,22 @@ export default function ProgressReportScreen() {
                 Brak dodanych zdjęć. Możesz dodać zdjęcia z galerii urządzenia.
               </Text>
             )}
+          </Card>
+          
+          {/* Sekcja komentarza */}
+          <Card style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Komentarz
+            </Text>
+            
+            <Input
+              value={comment}
+              onChangeText={setComment}
+              placeholder="Wpisz komentarz do raportu..."
+              multiline={true}
+              numberOfLines={4}
+              style={styles.commentInput}
+            />
           </Card>
           
           {/* Przyciski akcji */}
@@ -654,6 +888,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 12,
     fontSize: 14,
+  },
+  commentInput: {
+    marginBottom: 8,
   },
   actionButtons: {
     flexDirection: 'row',

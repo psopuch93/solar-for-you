@@ -93,7 +93,7 @@ export default function DashboardScreen() {
       title: 'Progres Raport',
       icon: 'bar-chart-outline',
       color: theme.colors.primary,
-      onPress: () => console.log('Progres Raport'),
+      onPress: () => router.push('/progress-report'),
     },
     {
       id: 'requirements',

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "SolarForYou",
-    "slug": "SolarForYou",
+    "slug": "for-you-group",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -36,6 +36,15 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "ee893ffe-9d10-4f2c-9508-4949252a47a3"
+      }
+    },
+    "owner": "szopenek"
   }
 }
