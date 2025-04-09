@@ -1,4 +1,4 @@
-// app/brigade.tsx
+// app/brigade.tsx - wersja dla Django
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -15,21 +15,49 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../utils/ThemeContext';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { projectService, Project, UserSettings } from '../services/project';
+import { projectService, UserSettings } from '../services/project';
+import { api } from '../services/api';
 
 // Komponenty
 import Button from '../components/common/Button';
 import Card from '../components/common/Card';
 import Input from '../components/common/Input';
 
+// Nowe interfejsy dla danych Django
+interface EmployeeData {
+  id: number;
+  first_name: string;
+  last_name: string;
+  pesel?: string;
+}
+
+interface BrigadeMember {
+  id: number;
+  employee: number;
+  employee_name: string;
+  employee_data?: EmployeeData;
+}
+
+interface ProjectData {
+  id: number;
+  name: string;
+  status: string;
+  status_display?: string;
+}
+
 export default function BrigadeScreen() {
   const { theme, isDarkMode } = useTheme();
   const [loading, setLoading] = useState<boolean>(true);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ProjectData[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [brigade, setBrigade] = useState<string[]>([]);
   const [showProjectPicker, setShowProjectPicker] = useState<boolean>(false);
   const [newMemberName, setNewMemberName] = useState<string>('');
+  
+  // Nowe stany dla Django
+  const [brigadeMembers, setBrigadeMembers] = useState<BrigadeMember[]>([]);
+  const [availableEmployees, setAvailableEmployees] = useState<EmployeeData[]>([]);
 
   // Pobieranie danych przy pierwszym renderowaniu
   useEffect(() => {
@@ -39,14 +67,40 @@ export default function BrigadeScreen() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Pobierz listę projektów
+      // Pobierz listę projektów z Django
       const projectsData = await projectService.getProjects();
       setProjects(projectsData);
 
       // Pobierz aktualne ustawienia użytkownika
       const settings = await projectService.getUserSettings();
       setSelectedProject(settings.project);
+      
+      // Znajdź id projektu na podstawie nazwy
+      if (settings.project) {
+        const project = projectsData.find(p => p.name === settings.project);
+        if (project) {
+          setSelectedProjectId(project.id);
+        }
+      }
+      
+      // Ustawienie listy członków brygady z Django
       setBrigade(settings.brigade);
+      
+      // Pobierz członków brygady z Django
+      try {
+        const membersResponse = await api.get<BrigadeMember[]>('/api/brigade-members/');
+        setBrigadeMembers(membersResponse);
+      } catch (error) {
+        console.error('Błąd podczas pobierania członków brygady:', error);
+      }
+      
+      // Pobierz dostępnych pracowników z Django
+      try {
+        const employeesResponse = await api.get<EmployeeData[]>('/api/available-employees/');
+        setAvailableEmployees(employeesResponse);
+      } catch (error) {
+        console.error('Błąd podczas pobierania dostępnych pracowników:', error);
+      }
 
     } catch (error) {
       console.error('Błąd podczas ładowania danych:', error);
@@ -60,35 +114,112 @@ export default function BrigadeScreen() {
     router.back();
   };
 
-  const handleProjectSelect = (projectName: string) => {
+  const handleProjectSelect = (projectName: string, projectId: number) => {
     setSelectedProject(projectName);
+    setSelectedProjectId(projectId);
     setShowProjectPicker(false);
   };
 
-  const handleAddMember = () => {
+  const handleAddMember = async () => {
     if (!newMemberName.trim()) {
       Alert.alert('Błąd', 'Wprowadź imię i nazwisko członka brygady.');
       return;
     }
 
-    // Dodaj nowego członka do listy
-    setBrigade([...brigade, newMemberName.trim()]);
-    setNewMemberName('');
+    // W Django potrzebujemy dodać pracownika przez API
+    try {
+      // Najpierw sprawdzamy czy mamy możliwość dodania pracownika przez API
+      // Poniższy kod zakłada, że pracownik już istnieje w systemie
+      
+      // Rozdziel imię i nazwisko
+      const [firstName, ...lastNameParts] = newMemberName.trim().split(' ');
+      const lastName = lastNameParts.join(' ');
+      
+      if (!lastName) {
+        Alert.alert('Błąd', 'Wprowadź zarówno imię jak i nazwisko pracownika.');
+        return;
+      }
+      
+      // Sprawdź czy pracownik istnieje i nie jest już przypisany
+      const existingEmployee = availableEmployees.find(emp => 
+        emp.first_name.toLowerCase() === firstName.toLowerCase() && 
+        emp.last_name.toLowerCase() === lastName.toLowerCase()
+      );
+      
+      if (!existingEmployee) {
+        // Jeśli nie znaleziono, możemy spróbować utworzyć nowego pracownika
+        Alert.alert(
+          'Pracownik nie znaleziony',
+          'Czy chcesz utworzyć nowego pracownika o tych danych?',
+          [
+            { text: 'Anuluj', style: 'cancel' },
+            { 
+              text: 'Utwórz', 
+              onPress: async () => {
+                try {
+                  // Utworzenie nowego pracownika przez API
+                  const newEmployee = await api.post<EmployeeData>('/api/employees/', {
+                    first_name: firstName,
+                    last_name: lastName,
+                    current_project: selectedProjectId
+                  });
+                  
+                  if (newEmployee && newEmployee.id) {
+                    // Dodanie do brygady
+                    await api.post('/api/brigade-members/', {
+                      employee: newEmployee.id
+                    });
+                    
+                    // Odśwież dane
+                    await loadData();
+                    setNewMemberName('');
+                  }
+                } catch (error) {
+                  console.error('Błąd podczas tworzenia pracownika:', error);
+                  Alert.alert('Błąd', 'Nie udało się utworzyć pracownika.');
+                }
+              }
+            }
+          ]
+        );
+        return;
+      }
+      
+      // Dodanie istniejącego pracownika do brygady
+      await api.post('/api/brigade-members/', {
+        employee: existingEmployee.id
+      });
+      
+      // Odśwież dane
+      await loadData();
+      setNewMemberName('');
+      
+    } catch (error) {
+      console.error('Błąd podczas dodawania członka brygady:', error);
+      Alert.alert('Błąd', 'Nie udało się dodać członka brygady.');
+    }
   };
 
-  const handleRemoveMember = (index: number) => {
+  const handleRemoveMember = (memberId: number, memberName: string) => {
     Alert.alert(
       'Usuń członka',
-      `Czy na pewno chcesz usunąć ${brigade[index]} z brygady?`,
+      `Czy na pewno chcesz usunąć ${memberName} z brygady?`,
       [
         { text: 'Anuluj', style: 'cancel' },
         { 
           text: 'Usuń', 
           style: 'destructive',
-          onPress: () => {
-            const newBrigade = [...brigade];
-            newBrigade.splice(index, 1);
-            setBrigade(newBrigade);
+          onPress: async () => {
+            try {
+              // W Django usuwamy członka brygady przez API
+              await api.delete(`/api/brigade-members/${memberId}/`);
+              
+              // Odśwież dane
+              await loadData();
+            } catch (error) {
+              console.error('Błąd podczas usuwania członka brygady:', error);
+              Alert.alert('Błąd', 'Nie udało się usunąć członka brygady.');
+            }
           }
         }
       ]
@@ -103,13 +234,32 @@ export default function BrigadeScreen() {
 
     setLoading(true);
     try {
+      // W Django zapisujemy ustawienia użytkownika inaczej
+      // Najpierw aktualizujemy wybrany projekt
+      
       const settings: UserSettings = {
         project: selectedProject,
         brigade: brigade
       };
 
       const response = await projectService.saveUserSettings(settings);
+      
       if (response.success) {
+        // Jeśli projekt został zaktualizowany, aktualizujemy projekt dla wszystkich członków brygady
+        if (selectedProjectId) {
+          // Aktualizacja projektu dla wszystkich członków brygady
+          for (const member of brigadeMembers) {
+            try {
+              await api.post('/api/update-employee-project/', {
+                employee_id: member.employee,
+                project_id: selectedProjectId
+              });
+            } catch (error) {
+              console.error(`Błąd aktualizacji projektu dla pracownika ${member.employee_name}:`, error);
+            }
+          }
+        }
+        
         Alert.alert('Sukces', 'Ustawienia zostały zapisane.');
       } else {
         Alert.alert('Błąd', response.message || 'Nie udało się zapisać ustawień.');
@@ -194,7 +344,7 @@ export default function BrigadeScreen() {
                             : 'transparent' 
                         }
                     ]}
-                    onPress={() => handleProjectSelect(item.name)}
+                    onPress={() => handleProjectSelect(item.name, item.id)}
                     >
                     <Text style={[styles.projectItemText, { color: theme.colors.text }]}>
                         {item.name}
@@ -216,11 +366,11 @@ export default function BrigadeScreen() {
           </Text>
 
           {/* Lista członków brygady */}
-          {brigade.length > 0 ? (
+          {brigadeMembers.length > 0 ? (
             <View style={styles.brigadeList}>
-              {brigade.map((member, index) => (
+              {brigadeMembers.map((member) => (
                 <View 
-                  key={index}
+                  key={member.id}
                   style={[
                     styles.brigadeItem,
                     { 
@@ -230,11 +380,11 @@ export default function BrigadeScreen() {
                   ]}
                 >
                   <Text style={[styles.brigadeItemText, { color: theme.colors.text }]}>
-                    {member}
+                    {member.employee_name}
                   </Text>
                   <TouchableOpacity
                     style={styles.removeButton}
-                    onPress={() => handleRemoveMember(index)}
+                    onPress={() => handleRemoveMember(member.id, member.employee_name)}
                   >
                     <Ionicons name="close-circle" size={24} color={theme.colors.error} />
                   </TouchableOpacity>

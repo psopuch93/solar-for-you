@@ -1,4 +1,4 @@
-// services/auth.ts - pełna wersja z rozszerzonym logowaniem
+// services/auth.ts - wersja dla Django
 import { api } from './api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -7,15 +7,19 @@ const AUTH_SESSION_KEY = '@solar_for_you_session';
 
 export interface User {
   email: string;
+  username: string;
   access: string;
-  name?: string; // Dodane pole name
+  name?: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 export interface LoginResponse {
   success: boolean;
   message: string;
   access?: string;
-  name?: string; // Dodane pole name
+  redirect?: string;
+  user?: User;
 }
 
 export interface AuthState {
@@ -24,37 +28,51 @@ export interface AuthState {
 }
 
 // Pomocnicza funkcja do zapisywania danych użytkownika
-async function saveUserData(email: string, access: string, name?: string) {
-  const userData: User = { 
-    email, 
-    access,
-    name
-  };
+async function saveUserData(userData: User) {
   console.log('💾 Zapisywanie danych użytkownika:', JSON.stringify(userData, null, 2));
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(userData));
 }
 
 export const auth = {
   // Logowanie
-  login: async (email: string, password: string): Promise<LoginResponse> => {
+  login: async (username: string, password: string): Promise<LoginResponse> => {
     try {
-      console.log('🔐 Próba logowania dla użytkownika:', email);
+      console.log('🔐 Próba logowania dla użytkownika:', username);
       
-      // Dokładne dopasowanie do kodu Flask, który szuka 'username' jako klucza
-      console.log('📤 Wysyłanie danych:', { username: email, password: '***' });
+      // Django oczekuje username i password jako kluczy
+      console.log('📤 Wysyłanie danych:', { username: username, password: '***' });
       
-      const response = await api.post<LoginResponse>('/login-mobile', { 
-        username: email,
+      const response = await api.post<any>('/api/login/', { 
+        username,
         password 
       });
       
       console.log('📥 Otrzymana odpowiedź:', JSON.stringify(response, null, 2));
-      console.log('📋 Czy zawiera pole name?', response.name !== undefined);
       
       if (response && response.success) {
-        console.log('📝 Zapisuję dane użytkownika z polem name:', response.name);
-        await saveUserData(email, response.access || 'user', response.name);
-        return response;
+        // Przygotowanie danych użytkownika na podstawie odpowiedzi z Django
+        // Zakładamy, że Django zwraca podstawowe dane użytkownika w odpowiedzi
+        const userData: User = {
+          username: username,
+          email: response.email || username,
+          access: response.access || 'user',
+          first_name: response.first_name,
+          last_name: response.last_name,
+          name: response.first_name && response.last_name 
+            ? `${response.first_name} ${response.last_name}` 
+            : undefined
+        };
+        
+        console.log('📝 Zapisuję dane użytkownika:', userData);
+        await saveUserData(userData);
+        
+        return {
+          success: true,
+          message: 'Logowanie udane',
+          access: response.access,
+          redirect: response.redirect,
+          user: userData
+        };
       } else {
         return {
           success: false,
@@ -76,6 +94,13 @@ export const auth = {
   logout: async (): Promise<boolean> => {
     try {
       console.log('🚪 Wylogowywanie użytkownika');
+      
+      // Wywołanie endpointu wylogowania w Django
+      try {
+        await api.post('/api/logout/', {});
+      } catch (e) {
+        console.warn('⚠️ Błąd podczas wylogowywania na serwerze, kontynuuję lokalne wylogowanie:', e);
+      }
       
       // Usuń dane z AsyncStorage
       await AsyncStorage.removeItem(AUTH_USER_KEY);
@@ -118,7 +143,6 @@ export const auth = {
       const userData = await AsyncStorage.getItem(AUTH_USER_KEY);
       const user = userData ? JSON.parse(userData) : null;
       console.log('👤 Pobrano dane użytkownika:', user ? JSON.stringify(user, null, 2) : 'brak');
-      console.log('🏷️ Czy zawiera pole name?', user?.name !== undefined);
       return user;
     } catch (error) {
       console.error('❌ Błąd pobierania danych użytkownika:', error);

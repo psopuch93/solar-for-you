@@ -1,15 +1,25 @@
-// app/_layout.tsx
+// app/_layout.tsx - z bezpieczną inicjalizacją NFC
 import React, { useEffect } from 'react';
-import { StatusBar, LogBox } from 'react-native';
+import { StatusBar, LogBox, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { ThemeProvider, useTheme } from '../utils/ThemeContext';
 import { useFonts } from 'expo-font';
 import { SplashScreen } from 'expo-router';
 
-// Ignoruj niektóre ostrzeżenia (opcjonalnie)
+// Ignoruj niektóre ostrzeżenia
 LogBox.ignoreLogs([
   'Async Storage has been extracted from react-native core',
 ]);
+
+// Bezpieczny import NFC
+let NfcManager: any = null;
+try {
+  if (Platform.OS !== 'web') {
+    NfcManager = require('react-native-nfc-manager').default;
+  }
+} catch (error) {
+  console.log('NFC Manager not available in layout', error);
+}
 
 // Zapobiegaj automatycznemu ukrywaniu ekranu ładowania
 SplashScreen.preventAutoHideAsync();
@@ -21,6 +31,61 @@ export default function RootLayout() {
     // 'OpenSans-Bold': require('../assets/fonts/OpenSans-Bold.ttf'),
   });
 
+  // Inicjalizacja NFC po załadowaniu aplikacji
+  useEffect(() => {
+    // Inicjalizuj NFC tylko na platformach mobilnych
+    if (Platform.OS !== 'web' && NfcManager) {
+      const initNfc = async () => {
+        try {
+          // Sprawdź, czy NfcManager ma metodę isSupported
+          if (typeof NfcManager.isSupported !== 'function') {
+            console.log('NfcManager.isSupported is not a function');
+            return;
+          }
+          
+          // Sprawdź, czy urządzenie obsługuje NFC
+          const isSupported = await NfcManager.isSupported();
+          
+          if (isSupported) {
+            // Sprawdź, czy NfcManager ma metodę start
+            if (typeof NfcManager.start !== 'function') {
+              console.log('NfcManager.start is not a function');
+              return;
+            }
+            
+            // Inicjalizuj NFC Manager
+            await NfcManager.start();
+            console.log('NFC initialized successfully');
+          } else {
+            console.log('NFC is not supported on this device');
+          }
+        } catch (error) {
+          console.error('Error initializing NFC:', error);
+        }
+      };
+      
+      initNfc();
+      
+      // Cleanup przy odmontowaniu
+      return () => {
+        if (NfcManager) {
+          try {
+            if (typeof NfcManager.cancelTechnologyRequest === 'function') {
+              NfcManager.cancelTechnologyRequest().catch(() => {});
+            }
+            
+            if (typeof NfcManager.unregisterTagEvent === 'function') {
+              NfcManager.unregisterTagEvent().catch(() => {});
+            }
+          } catch (error) {
+            console.error('Error during NFC cleanup:', error);
+          }
+        }
+      };
+    }
+  }, []);
+
+  // Efekt do ukrycia ekranu ładowania po załadowaniu czcionek
   useEffect(() => {
     if (fontsLoaded) {
       // Ukryj ekran ładowania po załadowaniu czcionek

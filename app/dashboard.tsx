@@ -1,4 +1,4 @@
-// app/dashboard.tsx
+// app/dashboard.tsx - wersja dla Django
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -44,36 +44,47 @@ export default function DashboardScreen() {
   }, []);
 
   // Funkcja do wyciągnięcia pierwszego imienia z pełnego imienia i nazwiska
-  const getFirstName = (name?: string, email?: string): string => {
-    console.log('🔍 getFirstName - dane wejściowe:', { name, email });
+  const getFirstName = (userData?: User | null): string => {
+    console.log('🔍 getFirstName - dane wejściowe:', userData);
     
-    // Jeśli mamy dostępne imię i nazwisko z serwera
-    if (name) {
-      console.log('✅ Używam imienia z serwera:', name);
+    // Dla Django sprawdzamy w specyficznej kolejności
+    // 1. Próbujemy użyć pola name, które mogliśmy zapisać podczas logowania
+    if (userData?.name) {
+      console.log('✅ Używam imienia z pola name:', userData.name);
       // Zwróć tylko pierwszą część (imię)
-      return name.split(' ')[0];
+      return userData.name.split(' ')[0];
     }
     
-    console.log('⚠️ Brak imienia z serwera, próbuję użyć email:', email);
-    
-    // Fallback na email jeśli nie ma imienia
-    // Jeśli nie ma maila, zwróć "Użytkowniku"
-    if (!email) {
-      console.log('❌ Brak email, używam "Użytkowniku"');
-      return 'Użytkowniku';
+    // 2. Próbujemy użyć pola first_name z Django
+    if (userData?.first_name) {
+      console.log('✅ Używam first_name z Django:', userData.first_name);
+      return userData.first_name;
     }
     
-    // Spróbuj wyciągnąć coś przyzwoitego z emaila
-    const beforeAt = email.split('@')[0];
-    // Jeśli jest kropka, zwróć pierwszą część
-    if (beforeAt.includes('.')) {
-      const result = beforeAt.split('.')[0];
-      console.log('📧 Wyciągam imię z email (część przed kropką):', result);
-      return result;
+    // 3. Fallback na username lub email jeśli nie ma imienia
+    if (userData?.username) {
+      console.log('⚠️ Brak imienia, używam username:', userData.username);
+      return userData.username;
     }
-    // W ostateczności zwróć całą część przed @
-    console.log('📧 Wyciągam imię z email (część przed @):', beforeAt);
-    return beforeAt;
+    
+    if (userData?.email) {
+      console.log('⚠️ Brak imienia i username, używam email:', userData.email);
+      // Spróbuj wyciągnąć coś przyzwoitego z emaila
+      const beforeAt = userData.email.split('@')[0];
+      // Jeśli jest kropka, zwróć pierwszą część
+      if (beforeAt.includes('.')) {
+        const result = beforeAt.split('.')[0];
+        console.log('📧 Wyciągam imię z email (część przed kropką):', result);
+        return result;
+      }
+      // W ostateczności zwróć całą część przed @
+      console.log('📧 Wyciągam imię z email (część przed @):', beforeAt);
+      return beforeAt;
+    }
+    
+    // W ostateczności
+    console.log('❌ Brak danych, używam "Użytkowniku"');
+    return 'Użytkowniku';
   };
 
   const handleLogout = async () => {
@@ -157,11 +168,7 @@ export default function DashboardScreen() {
             Dashboard
           </Text>
           <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
-            {(() => {
-              const firstName = getFirstName(userData?.name, userData?.email);
-              console.log('👋 Wyświetlam powitanie z imieniem:', firstName);
-              return `Witaj, ${firstName || 'Użytkowniku'}`;
-            })()}
+            {`Witaj, ${getFirstName(userData)}`}
           </Text>
         </View>
         

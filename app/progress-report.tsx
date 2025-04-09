@@ -1,4 +1,4 @@
-// app/progress-report.tsx
+// app/progress-report.tsx - z integracją skanowania NFC
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -17,11 +17,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../utils/ThemeContext';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
+const DateTimePicker = Platform.OS !== 'web' 
+  ? require('@react-native-community/datetimepicker').default 
+  : null;
 import * as ImagePicker from 'expo-image-picker';
 import { reportService, ProgressReport, ReportMember, ReportImage } from '../services/report';
 import { projectService } from '../services/project';
+import { employeeService } from '../services/employee';
 import { Picker } from '@react-native-picker/picker';
+import { checkNfcSupport } from '../utils/nfcUtils';
+import NfcScanner from '../components/common/NfcScanner';
+
 
 // Komponenty
 import Button from '../components/common/Button';
@@ -60,11 +66,13 @@ export default function ProgressReportScreen() {
   const [date, setDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   const [projectName, setProjectName] = useState<string>('');
+  const [projectId, setProjectId] = useState<number | null>(null);
   const [projectConfig, setProjectConfig] = useState<any>(null);
   
   // Członkowie brygady
   const [allMembers, setAllMembers] = useState<string[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<ReportMember[]>([]);
+  const [allEmployeesData, setAllEmployeesData] = useState<any[]>([]);
 
   // Lista dodanych aktywności
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -83,9 +91,29 @@ export default function ProgressReportScreen() {
   // Komentarz
   const [comment, setComment] = useState<string>('');
   
+  // NFC związane
+  const [showNfcScanner, setShowNfcScanner] = useState<boolean>(false);
+  const [isNfcSupported, setIsNfcSupported] = useState<boolean>(false);
+
+  
   // Efekt inicjalizujący
   useEffect(() => {
-    loadInitialData();
+    const checkNfc = async () => {
+      try {
+        if (Platform.OS === 'web') {
+          setIsNfcSupported(false);
+          return;
+        }
+        
+        const supported = await checkNfcSupport();
+        setIsNfcSupported(supported);
+      } catch (error) {
+        console.error('Błąd podczas sprawdzania NFC:', error);
+        setIsNfcSupported(false);
+      }
+    };
+    
+    checkNfc();
   }, []);
   
   // Funkcja ładująca początkowe dane
@@ -96,6 +124,10 @@ export default function ProgressReportScreen() {
       const members = await reportService.getBrigadeMembers();
       setAllMembers(members);
       
+      // Pobranie wszystkich pracowników dla funkcji NFC
+      const employees = await employeeService.getAllEmployees();
+      setAllEmployeesData(employees);
+      
       // Pobranie ustawień użytkownika (aktualny projekt)
       const settings = await projectService.getUserSettings();
       setProjectName(settings.project);
@@ -104,6 +136,13 @@ export default function ProgressReportScreen() {
       if (settings.project) {
         const config = await projectService.getProjectConfig(settings.project);
         setProjectConfig(config);
+        
+        // Znajdź ID projektu
+        const projects = await projectService.getProjects();
+        const project = projects.find(p => p.name === settings.project);
+        if (project) {
+          setProjectId(project.id);
+        }
       }
       
       // Jeśli podano ID roboczego raportu, załaduj go
@@ -114,6 +153,7 @@ export default function ProgressReportScreen() {
           setSelectedMembers(draftReport.members);
           setImages(draftReport.images);
           setProjectName(draftReport.projectName || '');
+          setProjectId(draftReport.projectId || null);
           setComment(draftReport.comment || '');
           // Jeśli istnieją zapisane aktywności, załaduj je
           if (draftReport.activities) {
@@ -160,7 +200,16 @@ export default function ProgressReportScreen() {
       setSelectedMembers(selectedMembers.filter(m => m.name !== memberName));
     } else {
       // Dodanie członka do listy wybranych z domyślną liczbą godzin 0
-      setSelectedMembers([...selectedMembers, { name: memberName, hours: 0 }]);
+      // Sprawdź, czy możemy znaleźć ID pracownika
+      const employee = allEmployeesData.find(emp => 
+        `${emp.first_name} ${emp.last_name}` === memberName
+      );
+      
+      setSelectedMembers([...selectedMembers, { 
+        name: memberName, 
+        hours: 0,
+        employee_id: employee?.id
+      }]);
     }
   };
   
@@ -171,7 +220,21 @@ export default function ProgressReportScreen() {
       setSelectedMembers([]);
     } else {
       // Jeśli nie, wybierz wszystkich z domyślną liczbą godzin 0
-      const allSelected = allMembers.map(name => ({ name, hours: 0 }));
+      const allSelected: ReportMember[] = [];
+      
+      for (const memberName of allMembers) {
+        // Sprawdź, czy możemy znaleźć ID pracownika
+        const employee = allEmployeesData.find(emp => 
+          `${emp.first_name} ${emp.last_name}` === memberName
+        );
+        
+        allSelected.push({ 
+          name: memberName, 
+          hours: 0,
+          employee_id: employee?.id
+        });
+      }
+      
       setSelectedMembers(allSelected);
     }
   };
@@ -699,6 +762,7 @@ export default function ProgressReportScreen() {
     
     setSaving(true);
     try {
+      
       const report: ProgressReport = {
         id: draftId, // Jeśli edytujemy istniejący roboczy, zachowaj jego ID
         date: formatDateForStorage(date),
@@ -707,6 +771,7 @@ export default function ProgressReportScreen() {
         comment: comment,
         isDraft: true,
         projectName: projectName,
+        projectId: projectId ?? undefined,
         createdAt: new Date().toISOString(),
         activities: activities
       };
@@ -754,6 +819,70 @@ export default function ProgressReportScreen() {
       sendReport();
     }
   };
+
+  // Funkcja do obsługi zeskanowanego tagu NFC
+  const handleNfcTagFound = async (tagId: string) => {
+    try {
+      console.log('Znaleziono tag NFC:', tagId);
+      
+      // Znajdź pracownika na podstawie ID tagu NFC
+      const employee = await employeeService.findEmployeeByNfcTag(tagId);
+      
+      if (employee) {
+        // Jeśli znaleziono pracownika, dodaj go do wybranych członków (lub zaznacz checkbox)
+        const memberName = employee.full_name || `${employee.first_name} ${employee.last_name}`;
+        const isSelected = selectedMembers.some(m => m.name === memberName);
+        
+        if (!isSelected) {
+          // Dodaj pracownika do listy wybranych z domyślną liczbą godzin
+          setSelectedMembers([...selectedMembers, { 
+            name: memberName, 
+            hours: 0,
+            employee_id: employee.id // Dodaj ID pracownika
+          }]);
+          
+          // Pokaż toast lub alert informujący o dodaniu pracownika
+          Alert.alert(
+            'Dodano pracownika',
+            `Pracownik ${memberName} został dodany do raportu.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          // Pracownik już jest wybrany - możemy go usunąć lub pokazać alert
+          Alert.alert(
+            'Pracownik już dodany',
+            `Pracownik ${memberName} jest już na liście.`,
+            [{ text: 'OK' }]
+          );
+        }
+      } else {
+        // Nie znaleziono pracownika przypisanego do tego tagu
+        Alert.alert(
+          'Nieznany tag',
+          'Nie znaleziono pracownika przypisanego do tej karty NFC.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('Błąd podczas przetwarzania tagu NFC:', error);
+      Alert.alert(
+        'Błąd',
+        'Wystąpił problem podczas przetwarzania karty NFC.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+  
+  // Pomocnicza funkcja sprawdzająca, czy pracownik ma przypisany tag NFC
+  const memberHasNfcTag = (memberName: string): boolean => {
+    // Znajdujemy pracownika w naszych danych
+    const employee = allEmployeesData.find(
+      emp => `${emp.first_name} ${emp.last_name}` === memberName
+    );
+    
+    // Sprawdzamy czy pracownik ma przypisany tag
+    return !!employee?.employee_tag;
+  };
   
   const sendReport = async () => {
     setSubmitting(true);
@@ -766,6 +895,7 @@ export default function ProgressReportScreen() {
         comment: comment,
         isDraft: false,
         projectName: projectName,
+        projectId: projectId ?? undefined,
         createdAt: new Date().toISOString(),
         activities: activities
       };
@@ -915,18 +1045,31 @@ export default function ProgressReportScreen() {
             {renderActivityList()}
           </Card>
           
-          {/* Sekcja wyboru członków brygady */}
+          {/* Sekcja wyboru członków brygady - zmodyfikowana dla NFC */}
           <Card style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
                 Członkowie brygady
               </Text>
-              <Button
-                title={selectedMembers.length === allMembers.length ? "Odznacz wszystkich" : "Wybierz wszystkich"}
-                onPress={selectAllMembers}
-                size="small"
-                variant="outlined"
-              />
+              <View style={styles.sectionActions}>
+                <Button
+                  title={selectedMembers.length === allMembers.length ? "Odznacz wszystkich" : "Wybierz wszystkich"}
+                  onPress={selectAllMembers}
+                  size="small"
+                  variant="outlined"
+                  style={styles.actionButton}
+                />
+                {isNfcSupported && (
+                  <Button
+                    title="Skanuj NFC"
+                    onPress={() => setShowNfcScanner(true)}
+                    size="small"
+                    variant="outlined"
+                    icon={<Ionicons name="radio-outline" size={18} color={theme.colors.primary} style={{marginRight: 5}} />}
+                    style={styles.actionButton}
+                  />
+                )}
+              </View>
             </View>
             
             {/* Lista wszystkich członków brygady */}
@@ -941,11 +1084,22 @@ export default function ProgressReportScreen() {
                     ]}
                     onPress={() => toggleMemberSelection(member)}
                   >
-                    <Checkbox
-                      checked={selectedMembers.some(m => m.name === member)}
-                      onToggle={() => toggleMemberSelection(member)}
-                      label={member}
-                    />
+                    <View style={styles.memberCheckboxRow}>
+                      <Checkbox
+                        checked={selectedMembers.some(m => m.name === member)}
+                        onToggle={() => toggleMemberSelection(member)}
+                        label={member}
+                      />
+                      {/* Ikona NFC dla pracowników, którzy mają przypisane karty */}
+                      {memberHasNfcTag(member) && (
+                        <Ionicons 
+                          name="radio-outline" 
+                          size={18} 
+                          color={theme.colors.primary} 
+                          style={styles.nfcIcon} 
+                        />
+                      )}
+                    </View>
                   </TouchableOpacity>
                 ))
               ) : (
@@ -991,7 +1145,7 @@ export default function ProgressReportScreen() {
                       value={member.hours.toString()}
                       onChangeText={(text) => {
                         const hours = parseFloat(text) || 0;
-                        updateMemberHours(member.name, hours);
+                        updateMemberHours(member.name, hours ?? 0);
                       }}
                       keyboardType="numeric"
                       placeholder="0"
@@ -1091,6 +1245,13 @@ export default function ProgressReportScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Komponent skanera NFC */}
+      <NfcScanner
+        visible={showNfcScanner}
+        onClose={() => setShowNfcScanner(false)}
+        onTagFound={handleNfcTagFound}
+      />
     </SafeAreaView>
   );
 }
@@ -1143,6 +1304,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  sectionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionButton: {
+    marginLeft: 8,
   },
   sectionTitle: {
     fontSize: 18,
@@ -1212,6 +1380,15 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: 1,
   },
+  memberCheckboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flex: 1,
+  },
+  nfcIcon: {
+    marginLeft: 10,
+  },
   memberHoursItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1279,9 +1456,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 16,
-  },
-  actionButton: {
-    flex: 1,
-    marginHorizontal: 4,
   },
 });

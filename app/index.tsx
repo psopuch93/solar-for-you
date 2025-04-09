@@ -1,4 +1,4 @@
-// app/index.tsx
+// app/index.tsx - zaktualizowany ekran logowania
 import React, { useState } from 'react';
 import {
   View,
@@ -16,7 +16,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../utils/ThemeContext';
 import { router } from 'expo-router';
-import { auth } from '../services/auth'; // Dodany import auth
+import { auth } from '../services/auth'; // Zaktualizowany import auth
 
 // Komponenty
 import Input from '../components/common/Input';
@@ -39,8 +39,8 @@ export default function LoginScreen() {
     try {
       console.log('🧪 Testowanie połączenia z backendem...');
       
-      // Próba połączenia z serwerem
-      const response = await fetch('https://foryougroup.eu.pythonanywhere.com/', {
+      // Próba połączenia z serwerem Django
+      const response = await fetch('https://www.solarforyou.cloud', {
         method: 'GET',
         headers: {
           'Accept': 'text/html,application/json'
@@ -88,7 +88,7 @@ export default function LoginScreen() {
     setLoading(true);
 
     console.log('👉 Rozpoczynam proces logowania...');
-    console.log(`📧 Email: ${username}`);
+    console.log(`📧 Login: ${username}`);
     console.log(`🔑 Hasło: ${'*'.repeat(password.length)} (${password.length} znaków)`);
 
     try {
@@ -165,13 +165,12 @@ export default function LoginScreen() {
 
             <View style={styles.form}>
               <Input
-                label="Email"
+                label="Login"
                 value={username}
                 onChangeText={setUsername}
-                placeholder="Wprowadź adres email"
+                placeholder="Wprowadź nazwę użytkownika"
                 autoCapitalize="none"
-                keyboardType="email-address"
-                icon={<Ionicons name="mail-outline" size={20} color={theme.colors.textSecondary} />}
+                icon={<Ionicons name="person-outline" size={20} color={theme.colors.textSecondary} />}
               />
 
               <Input

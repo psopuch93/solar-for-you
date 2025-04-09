@@ -1,4 +1,4 @@
-// services/report.ts
+// services/report.ts - wersja dla Django
 import { api } from './api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User } from './auth';
@@ -11,6 +11,7 @@ const DRAFT_REPORTS_KEY = '@solar_for_you_draft_reports';
 export interface ReportMember {
   name: string;
   hours: number;
+  employee_id?: number;  // Dodano pole employee_id dla Django
 }
 
 // Interfejs dla zdjęcia raportu
@@ -47,18 +48,18 @@ export interface ProgressReport {
   comment?: string;    // Komentarz do raportu
   isDraft: boolean;    // Czy raport jest wersją roboczą
   projectName?: string; // Nazwa projektu, którego dotyczy raport
+  projectId?: number;   // ID projektu dla Django
   createdAt?: string;  // Data utworzenia raportu
   activities?: Activity[]; // Lista aktywności
 }
 
-// Format danych do wysyłki na serwer
+// Format danych do wysyłki na serwer Django
 export interface ReportSubmitData {
   date: string;
-  members: { name: string; hours: number }[];
-  projectName: string;
-  images: ReportImage[];
-  comment?: string;    // Komentarz do raportu
-  activities?: Activity[]; // Lista aktywności
+  project: number;  // W Django potrzebujemy ID projektu
+  members: { employee: number; hours_worked: number }[];  // Format dla Django
+  comment?: string;
+  activities?: any[];  // Aktywności w formacie dla Django
 }
 
 export const reportService = {
@@ -66,12 +67,25 @@ export const reportService = {
   getBrigadeMembers: async (): Promise<string[]> => {
     try {
       console.log('📋 Pobieranie członków brygady...');
-      const settings = await projectService.getUserSettings();
-      console.log(`✅ Pobrano ${settings.brigade.length} członków brygady`);
-      return settings.brigade;
+      
+      // W Django pobieramy członków brygady z odpowiedniego endpointu
+      const members = await api.get<any[]>('/api/brigade-members/');
+      console.log(`✅ Pobrano ${members.length} członków brygady`);
+      
+      // Przekształć na listę imion i nazwisk
+      const memberNames = members.map(member => member.employee_name);
+      return memberNames;
     } catch (error) {
       console.error('❌ Błąd podczas pobierania członków brygady:', error);
-      return [];
+      
+      // Fallback - pobierz dane z ustawień użytkownika
+      try {
+        const settings = await projectService.getUserSettings();
+        return settings.brigade;
+      } catch (innerError) {
+        console.error('❌ Błąd podczas pobierania ustawień użytkownika:', innerError);
+        return [];
+      }
     }
   },
 
@@ -153,43 +167,156 @@ export const reportService = {
     }
   },
 
-  // Wysyłanie raportu na serwer
+  // Wysyłanie raportu na serwer Django
   submitReport: async (report: ProgressReport): Promise<{ success: boolean; message: string }> => {
     try {
-      console.log('📤 Wysyłanie raportu na serwer...');
+      console.log('📤 Wysyłanie raportu na serwer Django...');
       
-      // Przygotuj dane do wysyłki
-      const submitData: ReportSubmitData = {
-        date: report.date,
-        members: report.members,
-        projectName: report.projectName || '',
-        images: report.images,
-        comment: report.comment,
-        activities: report.activities
-      };
-      
-      // Przykładowe wysłanie raportu (tu trzeba dostosować do endpointu API)
-      // W rzeczywistości implementacja będzie bardziej skomplikowana, np. z przesyłaniem plików
-      // Tutaj symulujemy sukces
-      
-      // Dla demonstracji zwracamy sukces
-      console.log('✅ Raport wysłany pomyślnie');
-      
-      // Jeśli raport był zapisany jako roboczy, usuń go
-      if (report.id && report.isDraft) {
-        await reportService.deleteDraftReport(report.id);
+      // Znajdź ID projektu na podstawie nazwy
+      let projectId = report.projectId;
+      if (!projectId && report.projectName) {
+        try {
+          const projects = await projectService.getProjects();
+          const project = projects.find(p => p.name === report.projectName);
+          if (project) {
+            projectId = project.id;
+          }
+        } catch (error) {
+          console.error('❌ Błąd podczas pobierania projektów:', error);
+          throw new Error('Nie udało się znaleźć ID projektu');
+        }
       }
       
-      return {
-        success: true,
-        message: 'Raport został wysłany pomyślnie!'
+      if (!projectId) {
+        throw new Error('Brak ID projektu');
+      }
+      
+      // Przekształć członków raportu do formatu Django
+      const members = await reportService.prepareReportMembers(report.members);
+      
+      // Przygotuj dane do wysyłki w formacie Django
+      const submitData: ReportSubmitData = {
+        date: report.date,
+        project: projectId,
+        members: members,
+        comment: report.comment,
+        activities: report.activities // To może wymagać dalszych przekształceń
       };
+      
+      // Wyślij podstawowe dane raportu
+      const createdReport = await api.post<any>('/api/create-progress-report/', submitData);
+      console.log('✅ Podstawowe dane raportu wysłane:', createdReport);
+      
+      if (createdReport && createdReport.id) {
+        // Jeśli raport został utworzony, wyślij zdjęcia (każde w osobnym żądaniu)
+        if (report.images && report.images.length > 0) {
+          for (const image of report.images) {
+            // Implementacja wysyłania zdjęć do Django
+            await reportService.uploadReportImage(createdReport.id, image);
+          }
+        }
+        
+        // Jeśli raport był zapisany jako roboczy, usuń go
+        if (report.id && report.isDraft) {
+          await reportService.deleteDraftReport(report.id);
+        }
+        
+        return {
+          success: true,
+          message: 'Raport został wysłany pomyślnie!'
+        };
+      } else {
+        throw new Error('Nie udało się utworzyć raportu na serwerze');
+      }
     } catch (error) {
       console.error('❌ Błąd podczas wysyłania raportu:', error);
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Wystąpił błąd podczas wysyłania raportu'
       };
+    }
+  },
+  
+  // Pomocnicza metoda do przekształcania członków raportu
+  prepareReportMembers: async (members: ReportMember[]): Promise<{ employee: number; hours_worked: number }[]> => {
+    try {
+      // Jeśli członkowie mają już ID, użyj ich
+      const preparedMembers: { employee: number; hours_worked: number }[] = [];
+      
+      for (const member of members) {
+        if (member.employee_id) {
+          preparedMembers.push({
+            employee: member.employee_id,
+            hours_worked: member.hours
+          });
+        } else {
+          // Jeśli nie ma ID, spróbuj znaleźć pracownika po imieniu i nazwisku
+          try {
+            // Pobierz listę pracowników
+            const employeesResponse = await api.get<any[]>('/api/employees/');
+            const employees = employeesResponse || [];
+            
+            // Szukaj pracownika po imieniu i nazwisku
+            const [firstName, ...lastNameParts] = member.name.split(' ');
+            const lastName = lastNameParts.join(' ');
+            
+            const employee = employees.find(emp => 
+              emp.first_name.toLowerCase() === firstName.toLowerCase() && 
+              emp.last_name.toLowerCase() === lastName.toLowerCase()
+            );
+            
+            if (employee) {
+              preparedMembers.push({
+                employee: employee.id,
+                hours_worked: member.hours
+              });
+            } else {
+              console.warn(`⚠️ Nie znaleziono pracownika o nazwie ${member.name}`);
+            }
+          } catch (error) {
+            console.error('❌ Błąd podczas pobierania pracowników:', error);
+          }
+        }
+      }
+      
+      return preparedMembers;
+    } catch (error) {
+      console.error('❌ Błąd podczas przygotowywania członków raportu:', error);
+      return [];
+    }
+  },
+  
+  // Metoda do wysyłania zdjęcia raportu
+  uploadReportImage: async (reportId: number, image: ReportImage): Promise<boolean> => {
+    try {
+      // Utworzenie obiektu FormData do wysłania pliku
+      const formData = new FormData();
+      formData.append('report', reportId.toString());
+      formData.append('name', image.name);
+      
+      // Dodaj plik obrazu
+      const fileUri = image.uri;
+      const fileName = image.name || fileUri.split('/').pop() || 'image.jpg';
+      const fileType = image.type || 'image/jpeg';
+      
+      // @ts-ignore - FormData append ma problemy z typami w React Native
+      formData.append('image', {
+        uri: fileUri,
+        name: fileName,
+        type: fileType
+      });
+      
+      // Wyślij żądanie do API Django
+      await api.post('/api/progress-report-images/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        }
+      });
+      
+      return true;
+    } catch (error) {
+      console.error('❌ Błąd podczas wysyłania zdjęcia raportu:', error);
+      return false;
     }
   }
 };

@@ -9,13 +9,26 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.solarforyou.app",
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Ta aplikacja używa NFC do skanowania kart pracowników",
+        "com.apple.developer.nfc.readersession.formats": [
+          "NDEF",
+          "TAG"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.solarforyou.app",
+      "permissions": [
+        "NFC",
+        "android.permission.NFC"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -31,6 +44,12 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "react-native-nfc-manager",
+        {
+          "extended-nfc-tag-support": true
         }
       ]
     ],
