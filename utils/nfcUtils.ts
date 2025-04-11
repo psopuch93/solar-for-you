@@ -3,18 +3,51 @@ import { Platform } from 'react-native';
 
 // Bezpieczny import z obsługą błędów
 let NfcManager: any = null;
-try {
-  if (Platform.OS !== 'web') {
-    // Dynamiczny import tylko dla platform mobilnych
-    NfcManager = require('react-native-nfc-manager').default;
+let NfcTech: any = null;
+
+// Zmodyfikowany, bardziej bezpieczny sposób importu NFC
+if (Platform.OS !== 'web') {
+  try {
+    // Najpierw sprawdźmy czy moduł jest dostępny bez przypisywania
+    const hasModule = (() => {
+      try {
+        return !!require.resolve('react-native-nfc-manager');
+      } catch (e) {
+        return false;
+      }
+    })();
+
+    if (hasModule) {
+      // Importujemy tylko jeśli moduł istnieje
+      const NfcPackage = require('react-native-nfc-manager');
+      if (NfcPackage && typeof NfcPackage === 'object') {
+        NfcManager = NfcPackage.default || NfcPackage;
+        NfcTech = NfcPackage.NfcTech;
+        console.log('NFC Manager imported successfully');
+      } else {
+        console.log('NFC Package imported but is invalid', NfcPackage);
+      }
+    } else {
+      console.log('react-native-nfc-manager is not available');
+    }
+  } catch (error) {
+    console.log('Error importing NFC Manager:', error);
   }
-} catch (error) {
-  console.log('NFC Manager not available', error);
+} else {
+  console.log('NFC import skipped - web platform detected');
 }
 
 // Funkcja pomocnicza do sprawdzania czy metoda istnieje
 const hasMethod = (obj: any, methodName: string): boolean => {
-  return obj && typeof obj[methodName] === 'function';
+  if (!obj) return false;
+  if (typeof obj !== 'object' && typeof obj !== 'function') return false;
+  
+  try {
+    return typeof obj[methodName] === 'function';
+  } catch (error) {
+    console.error(`Error checking if ${methodName} exists:`, error);
+    return false;
+  }
 };
 
 // Funkcja sprawdzająca dostępność NFC
@@ -30,13 +63,26 @@ export const checkNfcSupport = async (): Promise<boolean> => {
       return false;
     }
     
+    // Dodatkowe zabezpieczenie - zweryfikuj że NfcManager to obiekt
+    if (typeof NfcManager !== 'object') {
+      console.log('NfcManager is not an object');
+      return false;
+    }
+    
     // Bezpieczne sprawdzanie czy metoda istnieje
     if (!hasMethod(NfcManager, 'isSupported')) {
       console.log('NfcManager.isSupported is not a function');
       return false;
     }
     
-    return await NfcManager.isSupported();
+    // Dodatkowe zabezpieczenie dla wyniku
+    try {
+      const isSupported = await NfcManager.isSupported();
+      return Boolean(isSupported); // Konwersja do boolean w razie gdyby wynik był nieokreślony
+    } catch (innerError) {
+      console.error('Error in NfcManager.isSupported:', innerError);
+      return false;
+    }
   } catch (error) {
     console.error('Error checking NFC support:', error);
     return false;
@@ -45,13 +91,18 @@ export const checkNfcSupport = async (): Promise<boolean> => {
 
 // Funkcja do przerwania skanowania NFC
 export const cancelNfcScan = async (): Promise<void> => {
-  if (Platform.OS === 'web' || !NfcManager) {
+  if (!NfcManager) {
     return;
   }
   
   try {
+    // Bezpieczne anulowanie requestów NFC
     if (hasMethod(NfcManager, 'cancelTechnologyRequest')) {
-      await NfcManager.cancelTechnologyRequest();
+      await NfcManager.cancelTechnologyRequest().catch(() => {});
+    }
+    
+    if (hasMethod(NfcManager, 'unregisterTagEvent')) {
+      await NfcManager.unregisterTagEvent().catch(() => {});
     }
   } catch (error) {
     console.error('Error canceling NFC scan:', error);
@@ -60,7 +111,8 @@ export const cancelNfcScan = async (): Promise<void> => {
 
 // Funkcja do obsługi odczytu różnych typów tagów NFC
 export const readNfcTag = async (): Promise<string | null> => {
-  if (Platform.OS === 'web' || !NfcManager) {
+  if (!NfcManager || !NfcTech) {
+    console.log('NFC Manager or NfcTech is not available');
     return null;
   }
   
@@ -80,72 +132,34 @@ export const readNfcTag = async (): Promise<string | null> => {
     // Zainicjuj NFC
     await NfcManager.start();
     
-    // Próbujemy NfcA (standardowy protokół ISO/IEC 14443-3A)
-    try {
-      if (hasMethod(NfcManager, 'requestTechnology') && 
-          NfcManager.NfcTech && 
-          NfcManager.NfcTech.NfcA) {
-        
-        await NfcManager.requestTechnology(NfcManager.NfcTech.NfcA);
-        
-        if (hasMethod(NfcManager, 'getTag')) {
-          const tag = await NfcManager.getTag();
-          
-          if (tag && tag.id) {
-            return tag.id;
-          }
-        }
-      }
-    } catch (nfca_error) {
-      console.log('Not an NfcA tag or error:', nfca_error);
-      await cancelNfcScan();
-    }
-    
-    // Próbujemy Isodep (standardowy protokół ISO/IEC 14443-4)
-    try {
-      if (hasMethod(NfcManager, 'requestTechnology') && 
-          NfcManager.NfcTech && 
-          NfcManager.NfcTech.IsoDep) {
-        
-        await NfcManager.requestTechnology(NfcManager.NfcTech.IsoDep);
-        
-        if (hasMethod(NfcManager, 'getTag')) {
-          const tag = await NfcManager.getTag();
-          
-          if (tag && tag.id) {
-            return tag.id;
-          }
-        }
-      }
-    } catch (isodep_error) {
-      console.log('Not an IsoDep tag or error:', isodep_error);
-      await cancelNfcScan();
-    }
-    
     // Próbujemy ogólnego skanowania
     try {
       if (hasMethod(NfcManager, 'registerTagEvent')) {
         return new Promise((resolve) => {
           const cleanUp = () => {
-            NfcManager.unregisterTagEvent().catch(() => {});
+            if (hasMethod(NfcManager, 'unregisterTagEvent')) {
+              NfcManager.unregisterTagEvent().catch(() => {});
+            }
           };
           
           NfcManager.registerTagEvent(
-            (tag) => {
+            (tag: any) => {
               if (tag && tag.id) {
                 cleanUp();
                 resolve(tag.id);
               } else {
+                cleanUp();
                 resolve(null);
               }
             },
-            (error) => {
+            (error: any) => {
               console.log('Error registering tag event:', error);
               cleanUp();
               resolve(null);
             }
-          ).catch((error) => {
+          ).catch((error: any) => {
             console.log('Error in registerTagEvent:', error);
+            cleanUp();
             resolve(null);
           });
           
@@ -158,6 +172,7 @@ export const readNfcTag = async (): Promise<string | null> => {
       }
     } catch (register_error) {
       console.log('Error in general tag scanning:', register_error);
+      await cancelNfcScan();
     }
     
     // Jeśli dotarliśmy tutaj, nie udało się odczytać żadnego obsługiwanego typu tagu

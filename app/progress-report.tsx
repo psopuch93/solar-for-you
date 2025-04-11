@@ -106,10 +106,14 @@ export default function ProgressReportScreen() {
         }
         
         const supported = await checkNfcSupport();
+        console.log('NFC support check result:', supported);
         setIsNfcSupported(supported);
       } catch (error) {
         console.error('Błąd podczas sprawdzania NFC:', error);
         setIsNfcSupported(false);
+      } finally {
+        // Ładuj pozostałe dane niezależnie od stanu NFC
+        loadInitialData();
       }
     };
     
@@ -829,7 +833,7 @@ export default function ProgressReportScreen() {
       const employee = await employeeService.findEmployeeByNfcTag(tagId);
       
       if (employee) {
-        // Jeśli znaleziono pracownika, dodaj go do wybranych członków (lub zaznacz checkbox)
+        // Jeśli znaleziono pracownika, dodaj go do wybranych członków
         const memberName = employee.full_name || `${employee.first_name} ${employee.last_name}`;
         const isSelected = selectedMembers.some(m => m.name === memberName);
         
@@ -841,7 +845,7 @@ export default function ProgressReportScreen() {
             employee_id: employee.id // Dodaj ID pracownika
           }]);
           
-          // Pokaż toast lub alert informujący o dodaniu pracownika
+          // Pokaż alert informujący o dodaniu pracownika
           Alert.alert(
             'Dodano pracownika',
             `Pracownik ${memberName} został dodany do raportu.`,
@@ -1252,6 +1256,7 @@ export default function ProgressReportScreen() {
         onClose={() => setShowNfcScanner(false)}
         onTagFound={handleNfcTagFound}
       />
+
     </SafeAreaView>
   );
 }

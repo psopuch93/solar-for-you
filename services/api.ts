@@ -17,10 +17,12 @@ interface RedirectResponse {
 
 // Funkcja do pobierania z timeoutem
 export const fetchWithTimeout = async (resource: string, options: FetchOptions = {}): Promise<Response> => {
-  const { timeout = 8000, ...fetchOptions } = options;
+  const { timeout = 20000, ...fetchOptions } = options;
   
   console.log(`📡 Wysyłanie żądania do: ${resource}`);
-  console.log('📦 Opcje żądania:', JSON.stringify(fetchOptions, null, 2));
+  if (fetchOptions.headers) {
+    console.log('📦 Nagłówki żądania:', JSON.stringify(fetchOptions.headers, null, 2));
+  }
   
   const controller = new AbortController();
   const id = setTimeout(() => {
@@ -30,10 +32,12 @@ export const fetchWithTimeout = async (resource: string, options: FetchOptions =
   
   try {
     console.log('⏳ Oczekiwanie na odpowiedź...');
+    
+    // Zawsze dodaj credentials: 'include' dla obsługi ciasteczek
     const response = await fetch(resource, {
       ...fetchOptions,
       signal: controller.signal,
-      credentials: 'include', // Włącza obsługę ciasteczek sesji dla Django
+      credentials: 'include', // Ważne dla ciasteczek CSRF
     });
     
     clearTimeout(id);
@@ -47,31 +51,75 @@ export const fetchWithTimeout = async (resource: string, options: FetchOptions =
   }
 };
 
-// Bezpieczna funkcja do pobierania tokenu CSRF
+// Przechowujemy token CSRF w pamięci aplikacji jako fallback
+let inMemoryCsrfToken: string | null = null;
+
 async function getCsrfToken(): Promise<string | null> {
   try {
     // Pobierz token CSRF z odpowiedniego endpointu Django
     const response = await fetchWithTimeout(`${API_URL}/api/csrf/`, {
       method: 'GET',
       credentials: 'include',
+      headers: {
+        'Referer': API_URL, // Dodany nagłówek Referer
+        'X-Requested-With': 'XMLHttpRequest', // Dodany nagłówek X-Requested-With
+        'Accept': 'application/json' // Żądamy odpowiedzi JSON
+      }
     });
     
     // Bezpieczna obsługa cookies na różnych platformach
     let csrfToken: string | null = null;
     
+    // 1. Próba wyciągnięcia z odpowiedzi JSON
+    try {
+      const data = await response.json();
+      if (data && data.csrfToken) {
+        console.log('Znaleziono token CSRF w odpowiedzi JSON:', data.csrfToken.substring(0, 10) + '...');
+        csrfToken = data.csrfToken;
+        inMemoryCsrfToken = csrfToken; // Zapisz do pamięci
+        return csrfToken;
+      }
+    } catch (e) {
+      console.log('Odpowiedź nie jest poprawnym JSON, próbuję inne metody');
+    }
+    
+    // 2. Próba wyciągnięcia tokenu z nagłówków odpowiedzi
+    const headerToken = response.headers.get('X-CSRFToken');
+    if (headerToken) {
+      console.log('Znaleziono token CSRF w nagłówkach:', headerToken.substring(0, 10) + '...');
+      csrfToken = headerToken;
+      inMemoryCsrfToken = csrfToken; // Zapisz do pamięci
+      return csrfToken;
+    }
+    
+    // 3. Próba z ciasteczek na platformach, które je obsługują
     if (typeof document !== 'undefined' && document.cookie) {
-      // Pobierz ciasteczko CSRF
       const cookies = document.cookie.split(';');
       const csrfCookie = cookies.find(cookie => cookie.trim().startsWith('csrftoken='));
       
       if (csrfCookie) {
         csrfToken = csrfCookie.split('=')[1];
+        console.log('Znaleziono token CSRF w ciasteczkach:', csrfToken.substring(0, 10) + '...');
+        inMemoryCsrfToken = csrfToken; // Zapisz do pamięci
+        return csrfToken;
       }
     }
     
-    return csrfToken;
+    // 4. Użyj zapamiętanego tokenu jako fallback
+    if (inMemoryCsrfToken) {
+      console.log('Używam zapamiętanego tokenu CSRF:', inMemoryCsrfToken.substring(0, 10) + '...');
+      return inMemoryCsrfToken;
+    }
+    
+    console.warn('Nie udało się znaleźć tokenu CSRF.');
+    return null;
   } catch (error) {
     console.error('❌ Błąd podczas pobierania tokenu CSRF:', error);
+    // W przypadku błędu, spróbuj użyć zapamiętanego tokenu
+    if (inMemoryCsrfToken) {
+      console.log('Używam zapamiętanego tokenu CSRF po błędzie:', inMemoryCsrfToken.substring(0, 10) + '...');
+      return inMemoryCsrfToken;
+    }
     return null;
   }
 }
@@ -119,10 +167,17 @@ export const api = {
       
       // Dla Django potrzebujemy tokenu CSRF dla nie-GET żądań
       const csrfToken = await getCsrfToken();
+      if (!csrfToken) {
+        console.warn('⚠️ Brak tokenu CSRF przy żądaniu POST!');
+      } else {
+        console.log('🔐 Używam tokenu CSRF:', csrfToken.substring(0, 10) + '...');
+      }
       
       // Bezpieczne tworzenie nagłówków
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        'Referer': API_URL, // Dodany nagłówek Referer
+        'X-Requested-With': 'XMLHttpRequest', // Dodany nagłówek X-Requested-With
         ...(options.headers || {})
       };
       
@@ -131,10 +186,26 @@ export const api = {
         headers['X-CSRFToken'] = csrfToken;
       }
       
+      // Dodaj nagłówek własny dla identyfikacji klienta
+      headers['X-Client-ID'] = 'react-native-app';
+      
+      console.log('🔐 Nagłówki:', headers);
+      
+      // Przygotuj ciało requestu - musi być string dla fetch
+      let body: string;
+      if (typeof requestData === 'object' && requestData !== null) {
+        body = JSON.stringify(requestData);
+      } else if (typeof requestData === 'string') {
+        body = requestData;
+      } else {
+        body = JSON.stringify({});
+      }
+      
       const response = await fetchWithTimeout(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(requestData),
+        body,
+        credentials: 'include', // Ważne dla ciasteczek CSRF
         ...options,
       });
       
@@ -168,6 +239,40 @@ export const api = {
       
       if (!response.ok) {
         console.error(`❌ Błąd HTTP (${response.status}):`, responseData);
+        // Jeśli błąd dotyczy CSRF, pobierz nowy token i spróbuj ponownie
+        if (responseData && responseData.detail && responseData.detail.includes('CSRF')) {
+          console.log('🔄 Próba odświeżenia tokenu CSRF i ponownego wysłania żądania');
+          // Wymuś pobieranie nowego tokenu ignorując cache
+          inMemoryCsrfToken = null;
+          const newCsrfToken = await getCsrfToken();
+          
+          if (newCsrfToken) {
+            console.log('🔄 Otrzymano nowy token CSRF, ponawiam żądanie');
+            headers['X-CSRFToken'] = newCsrfToken;
+            
+            // Ponów żądanie z nowym tokenem
+            const retryResponse = await fetchWithTimeout(`${API_URL}${endpoint}`, {
+              method: 'POST',
+              headers,
+              body,
+              credentials: 'include',
+              ...options,
+            });
+            
+            if (retryResponse.ok) {
+              // Parsuj odpowiedź z ponowionego żądania
+              const retryText = await retryResponse.text();
+              try {
+                const retryData = retryText ? JSON.parse(retryText) : { success: true };
+                console.log('✅ Ponowne żądanie powiodło się:', retryData);
+                return retryData as T;
+              } catch (e) {
+                return { success: true } as unknown as T;
+              }
+            }
+          }
+        }
+        
         throw new Error(responseData.message || responseData.detail || `HTTP error! Status: ${response.status}`);
       }
       
@@ -189,6 +294,8 @@ export const api = {
       // Bezpieczne tworzenie nagłówków
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        'Referer': API_URL, // Dodany nagłówek Referer
+        'X-Requested-With': 'XMLHttpRequest', // Dodany nagłówek X-Requested-With
         ...(options.headers || {})
       };
       
@@ -201,6 +308,7 @@ export const api = {
         method: 'PUT',
         headers,
         body: JSON.stringify(requestData),
+        credentials: 'include', // Ważne dla ciasteczek CSRF
         ...options,
       });
       
@@ -231,10 +339,18 @@ export const api = {
       
       // Dla Django potrzebujemy tokenu CSRF dla nie-GET żądań
       const csrfToken = await getCsrfToken();
+      if (!csrfToken) {
+        console.warn('⚠️ Brak tokenu CSRF przy żądaniu DELETE!');
+      } else {
+        console.log('🔐 Używam tokenu CSRF:', csrfToken.substring(0, 10) + '...');
+      }
       
       // Bezpieczne tworzenie nagłówków
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        'Referer': API_URL, // Dodany nagłówek Referer
+        'X-Requested-With': 'XMLHttpRequest', // Dodany nagłówek X-Requested-With
+        'X-Client-ID': 'react-native-app', // Identyfikacja klienta
         ...(options.headers || {})
       };
       
@@ -243,9 +359,12 @@ export const api = {
         headers['X-CSRFToken'] = csrfToken;
       }
       
+      console.log('🔐 Nagłówki DELETE:', headers);
+      
       const response = await fetchWithTimeout(`${API_URL}${endpoint}`, {
         method: 'DELETE',
         headers,
+        credentials: 'include', // Ważne dla ciasteczek CSRF
         ...options,
       });
       
@@ -253,10 +372,45 @@ export const api = {
         const errorText = await response.text();
         console.error(`❌ Błąd HTTP (${response.status}):`, errorText);
         
+        // Próba przetworzenia błędu
         try {
           const errorData = JSON.parse(errorText);
+          
+          // Jeśli błąd dotyczy CSRF, pobierz nowy token i spróbuj ponownie
+          if (errorData && errorData.detail && errorData.detail.includes('CSRF')) {
+            console.log('🔄 Próba odświeżenia tokenu CSRF i ponownego wysłania żądania DELETE');
+            // Wymuś pobieranie nowego tokenu ignorując cache
+            inMemoryCsrfToken = null;
+            const newCsrfToken = await getCsrfToken();
+            
+            if (newCsrfToken) {
+              console.log('🔄 Otrzymano nowy token CSRF, ponawiam żądanie DELETE');
+              headers['X-CSRFToken'] = newCsrfToken;
+              
+              // Ponów żądanie z nowym tokenem
+              const retryResponse = await fetchWithTimeout(`${API_URL}${endpoint}`, {
+                method: 'DELETE',
+                headers,
+                credentials: 'include',
+                ...options,
+              });
+              
+              if (retryResponse.ok) {
+                // Obsługa odpowiedzi z ponowionego żądania
+                try {
+                  const retryText = await retryResponse.text();
+                  const retryData = retryText ? JSON.parse(retryText) : { success: true };
+                  console.log('✅ Ponowne żądanie DELETE powiodło się:', retryData);
+                  return retryData as T;
+                } catch (e) {
+                  return { success: true } as unknown as T;
+                }
+              }
+            }
+          }
+          
           throw new Error(errorData.message || errorData.detail || `HTTP error! Status: ${response.status}`);
-        } catch {
+        } catch (e) {
           throw new Error(`HTTP error! Status: ${response.status}, Body: ${errorText}`);
         }
       }
@@ -291,6 +445,8 @@ export const api = {
       // Nagłówki dla multipart/form-data - nie ustawiamy Content-Type
       // Będzie automatycznie ustawiony przez fetch z boundary
       const headers: Record<string, string> = {
+        'Referer': API_URL, // Dodany nagłówek Referer
+        'X-Requested-With': 'XMLHttpRequest', // Dodany nagłówek X-Requested-With
         ...(options.headers || {})
       };
       
@@ -303,6 +459,7 @@ export const api = {
         method: 'POST',
         headers,
         body: formData,
+        credentials: 'include', // Ważne dla ciasteczek CSRF
         ...options,
       });
       

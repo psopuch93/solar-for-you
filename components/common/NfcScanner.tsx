@@ -1,5 +1,5 @@
 // components/common/NfcScanner.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, Modal, StyleSheet, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../utils/ThemeContext';
@@ -9,15 +9,37 @@ import { checkNfcSupport, cancelNfcScan } from '../../utils/nfcUtils';
 // Bezpieczny import z obsługą błędów
 let NfcManager: any = null;
 let NfcTech: any = null;
-try {
-  if (Platform.OS !== 'web') {
-    // Dynamiczny import tylko dla platform mobilnych
-    const NfcPackage = require('react-native-nfc-manager');
-    NfcManager = NfcPackage.default;
-    NfcTech = NfcPackage.NfcTech;
+
+// Zmodyfikowany, bardziej bezpieczny sposób importu NFC
+if (Platform.OS !== 'web') {
+  try {
+    // Najpierw sprawdźmy czy moduł jest dostępny bez przypisywania
+    const hasModule = (() => {
+      try {
+        return !!require.resolve('react-native-nfc-manager');
+      } catch (e) {
+        return false;
+      }
+    })();
+
+    if (hasModule) {
+      // Importujemy tylko jeśli moduł istnieje
+      const NfcPackage = require('react-native-nfc-manager');
+      if (NfcPackage && typeof NfcPackage === 'object') {
+        NfcManager = NfcPackage.default || NfcPackage;
+        NfcTech = NfcPackage.NfcTech;
+        console.log('NFC Manager imported successfully in NfcScanner');
+      } else {
+        console.log('NFC Package imported in NfcScanner but is invalid', NfcPackage);
+      }
+    } else {
+      console.log('react-native-nfc-manager is not available in NfcScanner');
+    }
+  } catch (error) {
+    console.log('Error importing NFC Manager in NfcScanner:', error);
   }
-} catch (error) {
-  console.log('NFC Manager not available', error);
+} else {
+  console.log('NFC import skipped in NfcScanner - web platform detected');
 }
 
 interface NfcScannerProps {
@@ -32,19 +54,16 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
   const [message, setMessage] = useState<string>('Przygotowanie do skanowania...');
   const [error, setError] = useState<string | null>(null);
   const [isSupported, setIsSupported] = useState<boolean | null>(null);
+  const cleanupRef = useRef<() => void>(() => {}); // Referencja do funkcji czyszczącej zasoby
 
+  // Sprawdź wsparcie NFC gdy komponent jest widoczny
   useEffect(() => {
-    // Sprawdź, czy urządzenie obsługuje NFC
-    const checkIsSupported = async () => {
+    if (!visible) return;
+
+    const checkSupport = async () => {
       if (Platform.OS === 'web') {
         setIsSupported(false);
         setError('NFC nie jest dostępne w przeglądarce.');
-        return;
-      }
-      
-      if (!NfcManager) {
-        setIsSupported(false);
-        setError('Moduł NFC nie jest dostępny w tej aplikacji.');
         return;
       }
       
@@ -53,8 +72,9 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
         setIsSupported(supported);
         
         if (supported) {
-          if (typeof NfcManager.start === 'function') {
+          if (NfcManager && typeof NfcManager.start === 'function') {
             await NfcManager.start();
+            setMessage('Gotowy do skanowania.');
           } else {
             setError('Nie można uruchomić NFC - brak metody start.');
           }
@@ -68,27 +88,37 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
       }
     };
 
-    if (visible) {
-      checkIsSupported();
-    }
+    checkSupport();
 
+    // Funkcja czyszcząca przy zamknięciu
     return () => {
-      // Zatrzymaj NFC, gdy komponent zostanie odmontowany
-      if (visible && Platform.OS !== 'web' && NfcManager) {
-        cancelNfcScan().catch(() => {});
-      }
+      cleanupScan();
     };
   }, [visible]);
 
+  // Rozpocznij skanowanie gdy modal jest widoczny i NFC jest obsługiwane
   useEffect(() => {
-    // Rozpocznij skanowanie, gdy modal jest widoczny i NFC jest obsługiwane
-    if (visible && isSupported) {
+    if (visible && isSupported === true) {
       startScan();
     }
   }, [visible, isSupported]);
 
+  // Funkcja czyszcząca zasoby NFC
+  const cleanupScan = () => {
+    // Wywołaj zapisaną funkcję czyszczącą
+    cleanupRef.current();
+    
+    // Anuluj wszystkie operacje NFC
+    if (NfcManager) {
+      cancelNfcScan().catch(() => {});
+    }
+    
+    setIsScanning(false);
+  };
+
+  // Rozpocznij skanowanie NFC
   const startScan = async () => {
-    if (Platform.OS === 'web' || !NfcManager || !NfcTech) {
+    if (!NfcManager) {
       setError('NFC nie jest dostępne na tej platformie.');
       return;
     }
@@ -105,16 +135,21 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
         return;
       }
       
-      // Zarejestruj zdarzenie tagów
+      // Funkcja sprzątająca
       const cleanUp = () => {
         if (NfcManager && typeof NfcManager.unregisterTagEvent === 'function') {
           NfcManager.unregisterTagEvent().catch(() => {});
         }
       };
       
+      // Zapisz funkcję czyszczącą do referencji
+      cleanupRef.current = cleanUp;
+      
+      // Zarejestruj odbiornik zdarzeń NFC
       await NfcManager.registerTagEvent(
         (tag: any) => {
           if (tag && tag.id) {
+            console.log('Tag found:', tag);
             setMessage('Karta odczytana pomyślnie!');
             onTagFound(tag.id);
             
@@ -125,13 +160,13 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
             }, 1500);
           } else {
             setError('Nie udało się odczytać ID karty.');
-            cleanUp();
+            setIsScanning(false);
           }
         },
         (error: any) => {
           console.warn('Error during NFC scan:', error);
           setError('Wystąpił błąd podczas skanowania. Spróbuj ponownie.');
-          cleanUp();
+          setIsScanning(false);
         }
       );
       
@@ -139,7 +174,6 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
       setTimeout(() => {
         if (isScanning) {
           setError('Upłynął limit czasu skanowania. Spróbuj ponownie.');
-          cleanUp();
           setIsScanning(false);
         }
       }, 20000); // 20 sekund limit
@@ -160,13 +194,7 @@ const NfcScanner: React.FC<NfcScannerProps> = ({ visible, onClose, onTagFound })
 
   // Anuluj skanowanie
   const handleCancel = async () => {
-    if (Platform.OS !== 'web' && NfcManager) {
-      try {
-        await cancelNfcScan();
-      } catch (error) {
-        console.error('Error canceling scan:', error);
-      }
-    }
+    cleanupScan();
     onClose();
   };
 

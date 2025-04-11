@@ -1,4 +1,4 @@
-// app/brigade.tsx - wersja dla Django
+// app/brigade.tsx - z usprawnionym zarządzaniem brygadą
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -10,6 +10,7 @@ import {
   Alert,
   TextInput,
   FlatList,
+  Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../utils/ThemeContext';
@@ -29,6 +30,8 @@ interface EmployeeData {
   first_name: string;
   last_name: string;
   pesel?: string;
+  full_name?: string;
+  current_project?: number;
 }
 
 interface BrigadeMember {
@@ -58,10 +61,46 @@ export default function BrigadeScreen() {
   // Nowe stany dla Django
   const [brigadeMembers, setBrigadeMembers] = useState<BrigadeMember[]>([]);
   const [availableEmployees, setAvailableEmployees] = useState<EmployeeData[]>([]);
+  const [allEmployees, setAllEmployees] = useState<EmployeeData[]>([]);
+  
+  // Nowe stany dla modalu wyboru pracownika
+  const [showEmployeePicker, setShowEmployeePicker] = useState<boolean>(false);
+  const [employeeSearchTerm, setEmployeeSearchTerm] = useState<string>('');
 
   // Pobieranie danych przy pierwszym renderowaniu
   useEffect(() => {
-    loadData();
+    // Aktywnie pobieramy token CSRF najpierw
+    const fetchCsrfToken = async () => {
+      try {
+        // Próbujemy pobrać token CSRF bezpośrednio (bez cache)
+        const csrfEndpoint = '/api/csrf/';
+        console.log('🔐 Aktywnie pobieramy token CSRF z:', csrfEndpoint);
+        
+        const response = await api.get(csrfEndpoint, {
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+          }
+        });
+        
+        console.log('🔐 Odpowiedź CSRF:', response);
+        
+        if (response && response.csrfToken) {
+          console.log('✅ Otrzymano token CSRF:', response.csrfToken.substring(0, 10) + '...');
+        } else {
+          console.log('⚠️ Nie otrzymano tokenu CSRF w odpowiedzi API');
+        }
+      } catch (error) {
+        console.error('❌ Błąd podczas pobierania tokenu CSRF:', error);
+      }
+      
+      // Zawsze próbujemy załadować dane
+      loadData();
+    };
+    
+    fetchCsrfToken();
   }, []);
 
   const loadData = async () => {
@@ -86,28 +125,46 @@ export default function BrigadeScreen() {
       // Ustawienie listy członków brygady z Django
       setBrigade(settings.brigade);
       
+      // Zainicjalizuj zmienne na potrzeby filtrowania pracowników
+      let membersData: BrigadeMember[] = [];
+      let allEmployeesData: EmployeeData[] = [];
+      
       // Pobierz członków brygady z Django
       try {
         const membersResponse = await api.get<BrigadeMember[]>('/api/brigade-members/');
         setBrigadeMembers(membersResponse);
+        membersData = membersResponse;
       } catch (error) {
         console.error('Błąd podczas pobierania członków brygady:', error);
       }
       
-      // Pobierz dostępnych pracowników z Django
+      // Pobierz WSZYSTKICH pracowników z Django (nie tylko dostępnych)
       try {
-        const employeesResponse = await api.get<EmployeeData[]>('/api/available-employees/');
-        setAvailableEmployees(employeesResponse);
+        const allEmployeesResponse = await api.get<EmployeeData[]>('/api/employees/');
+        setAllEmployees(allEmployeesResponse);
+        allEmployeesData = allEmployeesResponse;
+        
+        // Odfiltruj pracowników już przypisanych do brygady, aby uzyskać listę dostępnych
+        loadAvailableEmployees(allEmployeesData, membersData);
       } catch (error) {
-        console.error('Błąd podczas pobierania dostępnych pracowników:', error);
+        console.error('Błąd podczas pobierania wszystkich pracowników:', error);
       }
-
     } catch (error) {
       console.error('Błąd podczas ładowania danych:', error);
       Alert.alert('Błąd', 'Nie udało się załadować danych.');
     } finally {
       setLoading(false);
     }
+  };
+  
+  // Funkcja pomocnicza do filtrowania dostępnych pracowników
+  const loadAvailableEmployees = (allEmps: EmployeeData[], brigadeMembs: BrigadeMember[]) => {
+    // Wyciągnij ID pracowników już w brygadzie
+    const brigadeEmployeeIds = brigadeMembs.map(member => member.employee);
+    
+    // Odfiltruj pracowników, którzy nie są jeszcze w brygadzie
+    const available = allEmps.filter(emp => !brigadeEmployeeIds.includes(emp.id));
+    setAvailableEmployees(available);
   };
 
   const handleGoBack = () => {
@@ -120,6 +177,7 @@ export default function BrigadeScreen() {
     setShowProjectPicker(false);
   };
 
+  // Zmodyfikowana funkcja dodająca członka ręcznie (tekstowo)
   const handleAddMember = async () => {
     if (!newMemberName.trim()) {
       Alert.alert('Błąd', 'Wprowadź imię i nazwisko członka brygady.');
@@ -128,9 +186,6 @@ export default function BrigadeScreen() {
 
     // W Django potrzebujemy dodać pracownika przez API
     try {
-      // Najpierw sprawdzamy czy mamy możliwość dodania pracownika przez API
-      // Poniższy kod zakłada, że pracownik już istnieje w systemie
-      
       // Rozdziel imię i nazwisko
       const [firstName, ...lastNameParts] = newMemberName.trim().split(' ');
       const lastName = lastNameParts.join(' ');
@@ -141,12 +196,24 @@ export default function BrigadeScreen() {
       }
       
       // Sprawdź czy pracownik istnieje i nie jest już przypisany
-      const existingEmployee = availableEmployees.find(emp => 
+      const existingEmployee = allEmployees.find(emp => 
         emp.first_name.toLowerCase() === firstName.toLowerCase() && 
         emp.last_name.toLowerCase() === lastName.toLowerCase()
       );
       
-      if (!existingEmployee) {
+      if (existingEmployee) {
+        // Sprawdź czy pracownik jest już przypisany do brygady
+        const alreadyInBrigade = brigadeMembers.some(member => member.employee === existingEmployee.id);
+        
+        if (alreadyInBrigade) {
+          Alert.alert('Informacja', 'Ten pracownik jest już w twojej brygadzie.');
+          setNewMemberName('');
+          return;
+        }
+        
+        // Dodanie istniejącego pracownika do brygady
+        await addEmployeeToBrigade(existingEmployee.id);
+      } else {
         // Jeśli nie znaleziono, możemy spróbować utworzyć nowego pracownika
         Alert.alert(
           'Pracownik nie znaleziony',
@@ -166,13 +233,7 @@ export default function BrigadeScreen() {
                   
                   if (newEmployee && newEmployee.id) {
                     // Dodanie do brygady
-                    await api.post('/api/brigade-members/', {
-                      employee: newEmployee.id
-                    });
-                    
-                    // Odśwież dane
-                    await loadData();
-                    setNewMemberName('');
+                    await addEmployeeToBrigade(newEmployee.id);
                   }
                 } catch (error) {
                   console.error('Błąd podczas tworzenia pracownika:', error);
@@ -182,21 +243,60 @@ export default function BrigadeScreen() {
             }
           ]
         );
-        return;
+      }
+    } catch (error) {
+      console.error('Błąd podczas dodawania członka brygady:', error);
+      Alert.alert('Błąd', 'Nie udało się dodać członka brygady.');
+    }
+  };
+
+  // Nowa funkcja do dodawania pracownika do brygady
+  const addEmployeeToBrigade = async (employeeId: number) => {
+    try {
+      console.log('Próba dodania pracownika o ID:', employeeId);
+      
+      // Najpierw upewnij się, że mamy aktualny token CSRF
+      try {
+        await api.get('/api/csrf/');
+      } catch (csrfError) {
+        console.warn('Błąd pobierania CSRF tokenu, ale kontynuuję:', csrfError);
       }
       
-      // Dodanie istniejącego pracownika do brygady
-      await api.post('/api/brigade-members/', {
-        employee: existingEmployee.id
-      });
+      // Dodaj pracownika do brygady poprzez API
+      const requestData = { employee: employeeId };
+      console.log('Dane żądania dodania pracownika:', requestData);
+      
+      const response = await api.post('/api/brigade-members/', requestData);
+      console.log('Odpowiedź dodania pracownika:', response);
       
       // Odśwież dane
       await loadData();
       setNewMemberName('');
       
+      return true;
     } catch (error) {
-      console.error('Błąd podczas dodawania członka brygady:', error);
-      Alert.alert('Błąd', 'Nie udało się dodać członka brygady.');
+      console.error('Błąd podczas dodawania do brygady:', error);
+      
+      // Specjalna obsługa błędów CSRF
+      if (error instanceof Error && error.message.includes('CSRF')) {
+        Alert.alert(
+          'Błąd weryfikacji CSRF',
+          'Wystąpił błąd weryfikacji CSRF. Spróbuj odświeżyć aplikację lub zalogować się ponownie.',
+          [
+            { 
+              text: 'OK',
+              onPress: () => console.log('Błąd CSRF zaakceptowany')
+            },
+            {
+              text: 'Odśwież',
+              onPress: () => loadData()
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Błąd', 'Nie udało się dodać pracownika do brygady.');
+      }
+      return false;
     }
   };
 
@@ -211,14 +311,43 @@ export default function BrigadeScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              console.log(`Próba usunięcia członka o ID: ${memberId}`);
+              
+              // Najpierw upewnij się, że mamy aktualny token CSRF
+              try {
+                await api.get('/api/csrf/');
+              } catch (csrfError) {
+                console.warn('Błąd pobierania CSRF tokenu, ale kontynuuję:', csrfError);
+              }
+              
               // W Django usuwamy członka brygady przez API
               await api.delete(`/api/brigade-members/${memberId}/`);
+              console.log('Członek usunięty pomyślnie');
               
               // Odśwież dane
               await loadData();
             } catch (error) {
               console.error('Błąd podczas usuwania członka brygady:', error);
-              Alert.alert('Błąd', 'Nie udało się usunąć członka brygady.');
+              
+              // Specjalna obsługa błędów CSRF
+              if (error instanceof Error && error.message.includes('CSRF')) {
+                Alert.alert(
+                  'Błąd weryfikacji CSRF',
+                  'Wystąpił błąd weryfikacji CSRF. Spróbuj odświeżyć aplikację lub zalogować się ponownie.',
+                  [
+                    { 
+                      text: 'OK',
+                      onPress: () => console.log('Błąd CSRF zaakceptowany')
+                    },
+                    {
+                      text: 'Odśwież',
+                      onPress: () => loadData()
+                    }
+                  ]
+                );
+              } else {
+                Alert.alert('Błąd', 'Nie udało się usunąć członka brygady.');
+              }
             }
           }
         }
@@ -234,26 +363,41 @@ export default function BrigadeScreen() {
 
     setLoading(true);
     try {
-      // W Django zapisujemy ustawienia użytkownika inaczej
-      // Najpierw aktualizujemy wybrany projekt
+      console.log('Zapisywanie ustawień projektu i brygady');
       
+      // Upewnij się, że mamy aktualny token CSRF
+      try {
+        await api.get('/api/csrf/');
+      } catch (csrfError) {
+        console.warn('Błąd pobierania CSRF tokenu, ale kontynuuję:', csrfError);
+      }
+      
+      // W Django zapisujemy ustawienia użytkownika
       const settings: UserSettings = {
         project: selectedProject,
         brigade: brigade
       };
 
+      console.log('Zapisywane ustawienia:', settings);
       const response = await projectService.saveUserSettings(settings);
+      console.log('Odpowiedź zapisywania ustawień:', response);
       
       if (response.success) {
         // Jeśli projekt został zaktualizowany, aktualizujemy projekt dla wszystkich członków brygady
         if (selectedProjectId) {
+          console.log('Aktualizacja projektu dla członków brygady na:', selectedProjectId);
+          
           // Aktualizacja projektu dla wszystkich członków brygady
           for (const member of brigadeMembers) {
             try {
-              await api.post('/api/update-employee-project/', {
+              console.log(`Aktualizacja projektu dla pracownika: ${member.employee_name} (ID: ${member.employee})`);
+              
+              const updateResponse = await api.post('/api/update-employee-project/', {
                 employee_id: member.employee,
                 project_id: selectedProjectId
               });
+              
+              console.log('Odpowiedź aktualizacji projektu:', updateResponse);
             } catch (error) {
               console.error(`Błąd aktualizacji projektu dla pracownika ${member.employee_name}:`, error);
             }
@@ -266,9 +410,57 @@ export default function BrigadeScreen() {
       }
     } catch (error) {
       console.error('Błąd podczas zapisywania ustawień:', error);
-      Alert.alert('Błąd', 'Wystąpił problem podczas zapisywania ustawień.');
+      
+      // Specjalna obsługa błędów CSRF
+      if (error instanceof Error && error.message.includes('CSRF')) {
+        Alert.alert(
+          'Błąd weryfikacji CSRF',
+          'Wystąpił błąd weryfikacji CSRF. Spróbuj odświeżyć aplikację lub zalogować się ponownie.',
+          [
+            { text: 'OK' },
+            {
+              text: 'Odśwież',
+              onPress: () => loadData()
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Błąd', 'Wystąpił problem podczas zapisywania ustawień.');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+  
+  // Nowa funkcja do otwierania modalu wyboru pracownika
+  const openEmployeePicker = () => {
+    setEmployeeSearchTerm('');
+    setShowEmployeePicker(true);
+  };
+  
+  // Nowa funkcja do filtrowania pracowników na podstawie wyszukiwania
+  const getFilteredEmployees = () => {
+    if (!employeeSearchTerm.trim()) {
+      return availableEmployees;
+    }
+    
+    const searchTerm = employeeSearchTerm.toLowerCase();
+    return availableEmployees.filter(emp => {
+      const fullName = `${emp.first_name} ${emp.last_name}`.toLowerCase();
+      return fullName.includes(searchTerm);
+    });
+  };
+  
+  // Nowa funkcja do wyboru pracownika z listy
+  const handleSelectEmployee = async (employee: EmployeeData) => {
+    setShowEmployeePicker(false);
+    
+    // Dodaj pracownika do brygady
+    const success = await addEmployeeToBrigade(employee.id);
+    
+    if (success) {
+      // Komunikat o sukcesie
+      Alert.alert('Sukces', `Pracownik ${employee.first_name} ${employee.last_name} został dodany do brygady.`);
     }
   };
 
@@ -361,9 +553,18 @@ export default function BrigadeScreen() {
 
         {/* Sekcja zarządzania brygadą */}
         <Card style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-            Członkowie brygady
-          </Text>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Członkowie brygady
+            </Text>
+            <Button
+              title="Dodaj pracownika"
+              onPress={openEmployeePicker}
+              size="small"
+              variant="outlined"
+              icon={<Ionicons name="person-add" size={16} color={theme.colors.primary} style={{marginRight: 6}} />}
+            />
+          </View>
 
           {/* Lista członków brygady */}
           {brigadeMembers.length > 0 ? (
@@ -393,23 +594,28 @@ export default function BrigadeScreen() {
             </View>
           ) : (
             <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-              Brak członków brygady. Dodaj kogoś poniżej.
+              Brak członków brygady. Dodaj kogoś z istniejących pracowników lub utwórz nowego.
             </Text>
           )}
-
-          {/* Formularz dodawania nowego członka */}
-          <View style={styles.addMemberForm}>
-            <Input
-              value={newMemberName}
-              onChangeText={setNewMemberName}
-              placeholder="Imię i nazwisko członka"
-              style={{ flex: 1, marginRight: 8 }}
-            />
-            <Button
-              title="Dodaj"
-              onPress={handleAddMember}
-              size="small"
-            />
+          
+          {/* Tworzenie nowego pracownika */}
+          <View style={styles.addMemberSection}>
+            <Text style={[styles.addMemberLabel, { color: theme.colors.text }]}>
+              Utwórz nowego pracownika:
+            </Text>
+            <View style={styles.addMemberForm}>
+              <Input
+                value={newMemberName}
+                onChangeText={setNewMemberName}
+                placeholder="Imię i nazwisko"
+                style={{ flex: 1, marginRight: 8 }}
+              />
+              <Button
+                title="Utwórz"
+                onPress={handleAddMember}
+                size="small"
+              />
+            </View>
           </View>
         </Card>
 
@@ -420,6 +626,62 @@ export default function BrigadeScreen() {
           style={styles.saveButton}
         />
       </ScrollView>
+      
+      {/* Modal do wyboru pracownika */}
+      <Modal
+        visible={showEmployeePicker}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowEmployeePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>
+                Wybierz pracownika
+              </Text>
+              <TouchableOpacity 
+                onPress={() => setShowEmployeePicker(false)}
+                style={styles.modalCloseButton}
+              >
+                <Ionicons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <Input
+              value={employeeSearchTerm}
+              onChangeText={setEmployeeSearchTerm}
+              placeholder="Szukaj pracownika..."
+              style={styles.searchInput}
+              icon={<Ionicons name="search" size={20} color={theme.colors.textSecondary} />}
+            />
+            
+            <ScrollView style={styles.employeeList} nestedScrollEnabled={true}>
+              {getFilteredEmployees().length > 0 ? (
+                getFilteredEmployees().map((employee) => (
+                  <TouchableOpacity
+                    key={employee.id}
+                    style={[
+                      styles.employeeItem,
+                      { borderBottomColor: theme.colors.border }
+                    ]}
+                    onPress={() => handleSelectEmployee(employee)}
+                  >
+                    <Text style={[styles.employeeName, { color: theme.colors.text }]}>
+                      {employee.first_name} {employee.last_name}
+                    </Text>
+                    <Ionicons name="add-circle-outline" size={24} color={theme.colors.primary} />
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                  Nie znaleziono pracowników
+                </Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -463,6 +725,12 @@ const styles = StyleSheet.create({
   },
   section: {
     marginBottom: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 18,
@@ -519,12 +787,66 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 14,
   },
+  addMemberSection: {
+    marginTop: 16,
+  },
+  addMemberLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
   addMemberForm: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
   },
   saveButton: {
     marginTop: 24,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxHeight: '80%',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  searchInput: {
+    marginBottom: 12,
+  },
+  employeeList: {
+    maxHeight: 400,
+  },
+  employeeItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  employeeName: {
+    fontSize: 16,
   },
 });
